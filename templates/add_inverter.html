@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <title>Додати інвертор</title>
+</head>
+<body>
+    <h1>Додати інвертор</h1>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <ul>
+          {% for category, message in messages %}
+            <li style="color: {% if category == 'success' %}green{% else %}red{% endif %};">{{ message }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+
+    <form method="POST">
+        <label for="name">Назва інвертора:</label><br>
+        <input type="text" name="name" required><br><br>
+
+        <label for="group">Група:</label><br>
+        <input type="text" name="group" required><br><br>
+
+        <label for="ip">IP-адреса:</label><br>
+        <input type="text" name="ip" required><br><br>
+
+        <label for="login">Логін:</label><br>
+        <input type="text" name="login"><br><br>
+
+        <label for="password">Пароль:</label><br>
+        <input type="password" name="password"><br><br>
+
+        <button type="submit">Додати</button>
+    </form>
+
+    <br>
+    <a href="{{ url_for('index') }}">← Назад</a>
+</body>
+</html>
