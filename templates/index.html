@@ -1,9 +1,40 @@
 <!DOCTYPE html>
-<html>
-<head><title>Ingecon Control</title></head>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <title>Список інверторів</title>
+</head>
 <body>
-  <h1>🟢 Ingecon Control</h1>
-  <p>Інтерфейс для керування інвертором.</p>
+    <h1>Список інверторів</h1>
+
+    {% if inverters %}
+        <table border="1" cellpadding="6" cellspacing="0">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Назва</th>
+                    <th>Група</th>
+                    <th>IP-адреса</th>
+                    <th>Логін</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for inverter in inverters %}
+                <tr>
+                    <td>{{ inverter.id }}</td>
+                    <td>{{ inverter.name }}</td>
+                    <td>{{ inverter.group }}</td>
+                    <td>{{ inverter.ip_address }}</td>
+                    <td>{{ inverter.login }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p>Інвертори ще не додані.</p>
+    {% endif %}
+
+    <br>
+    <a href="{{ url_for('add_inverter') }}">➕ Додати інвертор</a>
 </body>
 </html>
-
