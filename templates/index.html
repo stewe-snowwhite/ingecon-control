@@ -47,6 +47,7 @@
                     <th>Назва</th>
                     <th>Група</th>
                     <th>IP-адреса</th>
+                    <th>Статус</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -56,6 +57,13 @@
                     <td><a href="{{ url_for('edit_inverter', inverter_id=inverter.id) }}">{{ inverter.name }}</a></td>
                     <td>{{ inverter.group }}</td>
                     <td>{{ inverter.ip_address }}</td>
+                    <td>
+  {% if inverter.is_online %}
+    <span class="badge bg-success">Онлайн</span>
+  {% else %}
+    <span class="badge bg-secondary">Офлайн</span>
+  {% endif %}
+</td>
                   </tr>
                   {% endfor %}
                 </tbody>

@@ -21,7 +21,6 @@ class Inverter(db.Model):
 @app.route('/')
 def index():
     selected_group = request.args.get('group')
-
     groups = db.session.query(Inverter.group).distinct().all()
     groups = [g[0] for g in groups]
 
@@ -29,6 +28,10 @@ def index():
         inverters = Inverter.query.filter_by(group=selected_group).all()
     else:
         inverters = Inverter.query.all()
+
+    # Перевірка доступності
+    for inv in inverters:
+        inv.is_online = check_modbus_connection(inv.ip_address, timeout=1)
 
     return render_template(
         "index.html",
