@@ -1,3 +1,3 @@
-Flask==2.3.3
-pymodbus==3.3.2
-
+Flask
+Flask_SQLAlchemy
+pymodbus
