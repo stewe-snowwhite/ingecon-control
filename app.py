@@ -17,6 +17,14 @@ class Inverter(db.Model):
     login = db.Column(db.String(100), nullable=True)
     password = db.Column(db.String(100), nullable=True)
 
+from flask import send_file
+
+# Завантаження логів
+@app.route('/download-log')
+def download_log():
+    return send_file('modbus.log', as_attachment=True)
+
+
 # Головна сторінка
 @app.route('/')
 def index():
