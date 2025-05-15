@@ -48,6 +48,7 @@
                     <th>Група</th>
                     <th>IP-адреса</th>
                     <th>Статус</th>
+                    <th>Обмеження (%)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -58,12 +59,19 @@
                     <td>{{ inverter.group }}</td>
                     <td>{{ inverter.ip_address }}</td>
                     <td>
-  {% if inverter.is_online %}
-    <span class="badge bg-success">Онлайн</span>
-  {% else %}
-    <span class="badge bg-secondary">Офлайн</span>
-  {% endif %}
-</td>
+                      {% if inverter.is_online %}
+                        <span class="badge bg-success">Онлайн</span>
+                      {% else %}
+                        <span class="badge bg-secondary">Офлайн</span>
+                      {% endif %}
+                    </td>
+                    <td>
+                      {% if inverter.power_limit_percent is not none %}
+                        {{ inverter.power_limit_percent }}%
+                      {% else %}
+                        <span class="text-muted">—</span>
+                      {% endif %}
+                    </td>
                   </tr>
                   {% endfor %}
                 </tbody>
@@ -75,9 +83,29 @@
         <div id="actions" class="text-center mt-3" style="display: none;">
           <button type="submit" name="action" value="on" class="btn btn-success me-2">🔌 Увімкнути</button>
           <button type="submit" name="action" value="off" class="btn btn-danger me-2">⛔ Вимкнути</button>
-          <button type="submit" name="action" value="limit" class="btn btn-warning me-2">⚡ Обмежити потужність</button>
-          <button type="submit" name="action" value="test" class="btn btn-info me-2">🔍 Перевірити підключення</button>
-          <button type="submit" name="action" value="delete" onclick="return confirm('⚠️ Ви впевнені, що хочете видалити вибрані інвертори?');" class="btn btn-outline-danger">
+
+          <div class="mb-2">
+            <label for="limit_value" class="form-label">Значення обмеження (%):</label>
+            <input type="number" name="limit_value" min="1" max="100" value="50"
+                   class="form-control d-inline-block me-2" style="width: 120px;">
+          </div>
+
+          <div class="mb-3">
+            <button type="submit" name="action" value="limit" class="btn btn-warning me-2">
+              ⚡ Обмежити потужність
+            </button>
+
+            <button type="submit" name="action" value="limit_max" class="btn btn-outline-primary">
+              🔄 Повернути максимум
+            </button>
+          </div>
+
+          <button type="submit" name="action" value="test" class="btn btn-info me-2">
+            🔍 Перевірити підключення
+          </button>
+          <button type="submit" name="action" value="delete"
+                  onclick="return confirm('⚠️ Ви впевнені, що хочете видалити вибрані інвертори?');"
+                  class="btn btn-outline-danger">
             🗑️ Видалити
           </button>
         </div>
@@ -92,9 +120,8 @@
   </div>
 
   <a href="{{ url_for('download_log') }}" class="btn btn-outline-dark mt-3">
-  📄 Переглянути журнал
-</a>
-
+    📄 Переглянути журнал
+  </a>
 
   <script>
     const checkboxes = document.querySelectorAll('input[name="selected_ids"]');

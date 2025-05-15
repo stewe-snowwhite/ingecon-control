@@ -1,6 +1,12 @@
-from flask import Flask, render_template, request, redirect, url_for, flash
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file
 from flask_sqlalchemy import SQLAlchemy
-from modbus_utils import check_modbus_connection
+from modbus_utils import (
+    check_modbus_connection,
+    modbus_turn_on,
+    modbus_turn_off,
+    modbus_limit_power,
+    read_command_status
+)
 import os
 
 app = Flask(__name__)
@@ -17,15 +23,10 @@ class Inverter(db.Model):
     login = db.Column(db.String(100), nullable=True)
     password = db.Column(db.String(100), nullable=True)
 
-from flask import send_file
-
-# Завантаження логів
 @app.route('/download-log')
 def download_log():
     return send_file('modbus.log', as_attachment=True)
 
-
-# Головна сторінка
 @app.route('/')
 def index():
     selected_group = request.args.get('group')
@@ -37,9 +38,18 @@ def index():
     else:
         inverters = Inverter.query.all()
 
-    # Перевірка доступності
     for inv in inverters:
         inv.is_online = check_modbus_connection(inv.ip_address, timeout=1)
+
+        try:
+            cmd, raw_limit = read_command_status(inv.ip_address)
+            if cmd == 16:
+                percent = round(raw_limit / 32767 * 100, 1)
+                inv.power_limit_percent = percent
+            else:
+                inv.power_limit_percent = None
+        except Exception:
+            inv.power_limit_percent = None
 
     return render_template(
         "index.html",
@@ -48,7 +58,7 @@ def index():
         selected_group=selected_group
     )
 
-# Додавання інвертора
+
 @app.route('/add', methods=['GET', 'POST'])
 def add_inverter():
     if request.method == 'POST':
@@ -68,7 +78,6 @@ def add_inverter():
     groups = [g[0] for g in groups]
     return render_template("add_inverter.html", groups=groups)
 
-# Тест підключення до інвертора
 @app.route('/test/<int:inverter_id>')
 def test_connection(inverter_id):
     inverter = Inverter.query.get_or_404(inverter_id)
@@ -79,7 +88,6 @@ def test_connection(inverter_id):
         flash(f'Інвертор {inverter.name} ({inverter.ip_address}) недоступний по Modbus TCP.', 'danger')
     return redirect(url_for('index'))
 
-# Обробка кнопок керування
 @app.route('/control', methods=['POST'])
 def control_inverters():
     selected_ids = request.form.getlist('selected_ids')
@@ -118,15 +126,31 @@ def control_inverters():
 
         if action == "on":
             modbus_turn_on(inv.ip_address)
+
         elif action == "off":
             modbus_turn_off(inv.ip_address)
+
         elif action == "limit":
-            modbus_limit_power(inv.ip_address, value=50)
+            try:
+                value = int(request.form.get('limit_value', 50))
+                if not (1 <= value <= 100):
+                    raise ValueError("Недопустимий відсоток")
+            except Exception:
+                value = 50
+                flash("⚠️ Некоректне значення обмеження, використано 50%", "warning")
+
+            modbus_limit_power(inv.ip_address, value=value)
+            cmd, scaled = read_command_status(inv.ip_address)
+            if cmd is not None:
+                flash(f'📊 {inv.name} → CMD: {cmd}, Значення: {scaled}', 'info')
+
+        elif action == "limit_max":
+            modbus_limit_power(inv.ip_address, value=100)
+            flash(f'🔄 {inv.name} → Повернено до 100%', 'info')
 
     flash(f"Команда \"{action}\" виконана для {len(inverters)} інверторів.", "success")
     return redirect(url_for('index'))
 
-# Редагування інвертора
 @app.route('/edit/<int:inverter_id>', methods=['GET', 'POST'])
 def edit_inverter(inverter_id):
     inverter = Inverter.query.get_or_404(inverter_id)
@@ -145,8 +169,6 @@ def edit_inverter(inverter_id):
     groups = [g[0] for g in groups]
     return render_template('edit_inverter.html', inverter=inverter, groups=groups)
 
-
-# Видалення інвертора окремо
 @app.route('/delete/<int:inverter_id>', methods=['POST'])
 def delete_inverter(inverter_id):
     inverter = Inverter.query.get_or_404(inverter_id)
@@ -154,16 +176,6 @@ def delete_inverter(inverter_id):
     db.session.commit()
     flash(f'Інвертор "{inverter.name}" видалено.', 'info')
     return redirect(url_for('index'))
-
-# Заготовки для керування через Modbus TCP
-def modbus_turn_on(ip):
-    print(f"[Modbus] Увімкнути інвертор {ip}")
-
-def modbus_turn_off(ip):
-    print(f"[Modbus] Вимкнути інвертор {ip}")
-
-def modbus_limit_power(ip, value):
-    print(f"[Modbus] Обмежити потужність інвертора {ip} до {value}%")
 
 if __name__ == '__main__':
     if not os.path.exists('database.db'):
