@@ -4,7 +4,7 @@ from models import LoginThrottle
 
 import pytest
 
-from tests.helpers import post, token
+from tests.helpers import post, confirmed_post, token
 from tests.fake_modbus import FakeModbusTcpClient
 
 
@@ -52,7 +52,7 @@ def test_role_matrix(web, modbus, tmp_path, user_role, path, method):
     response = client.get(path) if method == 'GET' else post(client, path, data)
     allowed = (path == '/' or user_role == 'Administrator' or
                (user_role == 'Operator' and path in ('/test/1', '/control')))
-    expected = (200 if method == 'GET' else 302) if allowed else 403
+    expected = (200 if method == 'GET' or path in ('/delete/1','/control') else 302) if allowed else 403
     assert response.status_code == expected
     if not allowed:
         assert modbus[1] == []
@@ -225,21 +225,21 @@ def test_command_failure_is_not_reported_as_success(web, modbus, monkeypatch, fa
     if failure == 'write_error': fake.write_error = True
     if failure == 'read_error': fake.read_error = True
     monkeypatch.setattr(modbus_utils, 'ModbusTcpClient', lambda *a,**k: fake)
-    assert post(client, '/control', {'action':'on','selected_ids':'1'}).status_code == 302
-    with client.session_transaction() as sess:
-        messages = sess['_flashes']
-        assert all(category == 'danger' for category,_ in messages)
-        assert all('виконана' not in text and 'запущено' not in text for _,text in messages)
+    response = confirmed_post(client, '/control', {'action':'on','selected_ids':'1'})
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert 'class="unconfirmed"' in html
+    assert 'class="register_confirmed"' not in html
+    assert 'команда виконана' not in html and 'інвертор запущено' not in html
 
 
 def test_verified_register_write_does_not_claim_physical_start(web, modbus):
     module, client = web
     seed(module)
     module.app.config['MODBUS_WRITES_ENABLED'] = True
-    post(client, '/control', {'action':'on','selected_ids':'1'})
-    with client.session_transaction() as sess:
-        assert sess['_flashes'][0][0] == 'info'
-        assert 'фізичний стан інвертора не підтверджено' in sess['_flashes'][0][1]
+    response = confirmed_post(client, '/control', {'action':'on','selected_ids':'1'})
+    assert 'class="register_confirmed"' in response.get_data(as_text=True)
+    assert 'фізичний стан інвертора не підтверджено' in response.get_data(as_text=True)
 
 
 def test_cookie_and_response_security(web):
@@ -281,14 +281,14 @@ def test_get_cannot_execute_control_or_logout(web, modbus):
         assert client.get(path).status_code == 405
     assert modbus[1] == []
 
-@pytest.mark.parametrize('user_role,expected', [('Administrator',302),('Operator',302),('Viewer',403)])
+@pytest.mark.parametrize('user_role,expected', [('Administrator',200),('Operator',200),('Viewer',403)])
 def test_command_roles_with_mock_only(web, modbus, user_role, expected):
     module, client = web
     seed(module)
     role(module, user_role)
     module.app.config['MODBUS_WRITES_ENABLED'] = True
-    assert post(client, '/control', {'action':'on','selected_ids':'1'}).status_code == expected
-    assert bool(modbus[1]) == (expected == 302)
+    assert confirmed_post(client, '/control', {'action':'on','selected_ids':'1'}).status_code == expected
+    assert bool(modbus[1]) == (expected == 200)
 
 
 def test_logout_revokes_copied_cookie(web):

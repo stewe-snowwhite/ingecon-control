@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="uk"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark">
+<title>{% block title %}Панель{% endblock %} · ingecon-control</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='panel.css') }}">
+<script src="{{ url_for('static', filename='theme.js') }}"></script>
+<script src="{{ url_for('static', filename='panel.js') }}" defer></script>{% block scripts %}{% endblock %}
+</head><body>
+<a class="skip-link" href="#main">Перейти до вмісту</a>
+<header class="topbar">
+<a class="brand" href="{{ url_for('index') if g.user else url_for('login') }}"><span class="brand-mark" aria-hidden="true">i</span><span>ingecon<span class="brand-muted"> / control</span></span></a>
+{% if g.user %}{% include 'session_bar.html' %}{% endif %}
+<button type="button" id="theme-toggle" class="button subtle" aria-label="Перемкнути тему">Тема</button></header>
+<main id="main" class="workspace"><div id="page-alert" class="notice danger" role="alert" hidden></div>
+{% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<p class="notice {{ 'danger' if category in ('danger', 'error') else 'info' }}" role="status">{{ message }}</p>{% endfor %}{% endwith %}
+{% block content %}{% endblock %}</main><footer class="footer">ingecon-control <span>Моніторинг інверторів</span></footer>
+</body></html>

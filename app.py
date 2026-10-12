@@ -10,8 +10,11 @@ from flask import (Flask, abort, flash, g, redirect, render_template, request,
                    send_file, session, url_for, jsonify)
 from flask.helpers import get_debug_flag
 from flask_wtf.csrf import CSRFProtect
+from werkzeug.exceptions import HTTPException
 
-from models import db, Inverter, ROLES, User, MonitorConfig, InverterStatus
+from models import db, Inverter, ROLES, User, MonitorConfig, InverterStatus, StateEvent
+from dashboard import (ACTIONS, STATES, command_payload, dashboard_snapshot, date_filter,
+                       filters, sign_confirmation, verify_confirmation)
 from monitoring import current_statuses, Target, explain_reason
 from modbus_utils import modbus_limit_power, modbus_turn_off, modbus_turn_on
 from security import authenticate, load_user, log_failure, reserve_login_attempt, roles_required
@@ -23,7 +26,7 @@ USERNAME = re.compile(r'[a-z0-9_.-]{1,64}', re.ASCII)
 
 
 def create_app(config=None):
-    app = Flask(__name__, static_folder=None)
+    app = Flask(__name__)
     app.config.from_mapping(
         SECRET_KEY=os.environ.get('INGECON_SECRET_KEY'),
         SQLALCHEMY_DATABASE_URI=os.environ.get('INGECON_DATABASE_URI', 'sqlite:///database.db'),
@@ -62,13 +65,39 @@ def create_app(config=None):
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'DENY'
         response.headers['Referrer-Policy'] = 'same-origin'
-        # Existing Bootstrap CDN and inline JS retained until the dashboard stage.
-        response.headers['Content-Security-Policy'] = "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
+        response.headers['Content-Security-Policy'] = (
+            "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; "
+            "img-src 'self'; font-src 'self'; frame-ancestors 'none'; object-src 'none'; "
+            "base-uri 'self'; form-action 'self'"
+        )
         return response
+
+    def wants_json():
+        return request.path.startswith('/api/') or request.accept_mimetypes.best == 'application/json'
 
     @app.errorhandler(401)
     def login_required(error):
+        if wants_json():
+            return jsonify(error='Сесію завершено. Увійдіть знову.'), 401
         return render_template('unauthorized.html'), 401
+
+    @app.errorhandler(HTTPException)
+    def http_error(error):
+        messages = {400: 'Некоректний запит або недійсний CSRF. Оновіть сторінку й повторіть дію.',
+                    403: 'Недостатньо прав або операцію заблоковано.', 404: 'Сторінку або запис не знайдено.',
+                    405: 'Цей метод запиту не дозволений.', 500: 'Не вдалося обробити запит. Спробуйте пізніше.'}
+        message = messages.get(error.code, 'Запит не вдалося виконати.')
+        # Application validation messages are Ukrainian; do not expose internals.
+        if error.code in (400, 403) and any('\u0400' <= char <= '\u04ff' for char in error.description):
+            message = error.description
+        response = error.get_response()
+        if wants_json():
+            response.data = app.json.dumps({'error': message})
+            response.content_type = 'application/json'
+        else:
+            response.data = render_template('error.html', code=error.code, message=message)
+            response.content_type = 'text/html; charset=utf-8'
+        return response
 
     @app.route('/login', methods=['GET', 'POST'])
     def login():
@@ -113,18 +142,49 @@ def create_app(config=None):
     @app.get('/')
     @roles_required(*ALL_ROLES)
     def index():
-        selected_group = request.args.get('group')
-        groups = db.session.scalars(db.select(Inverter.group).distinct()).all()
-        snapshot = current_statuses(db.session, group=selected_group,
-                                    stale_after=app.config['MONITOR_STALE_AFTER_SECONDS'])
-        return render_template('index.html', inverters=snapshot['inverters'], groups=groups,
-                               selected_group=selected_group, monitor=snapshot['monitor'])
+        selected = filters()
+        snapshot = dashboard_snapshot(current_statuses(db.session,
+            stale_after=app.config['MONITOR_STALE_AFTER_SECONDS']), selected)
+        return render_template('index.html', **snapshot, selected=selected, states=STATES)
 
     @app.get('/api/statuses')
     @roles_required(*ALL_ROLES)
     def statuses():
-        return jsonify(current_statuses(db.session, group=request.args.get('group'),
-                                        stale_after=app.config['MONITOR_STALE_AFTER_SECONDS']))
+        snapshot = dashboard_snapshot(current_statuses(db.session,
+            stale_after=app.config['MONITOR_STALE_AFTER_SECONDS']), filters())
+        for row in snapshot['inverters']:
+            row['reason_text'] = explain_reason(row['reason'])
+        return jsonify(dict(snapshot, generated_at=time.time()))
+
+    @app.get('/history')
+    @roles_required(*ALL_ROLES)
+    def history():
+        state = request.args.get('state', '')
+        query = request.args.get('q', '').strip()
+        inverter_id = request.args.get('inverter_id', '')
+        since, until = request.args.get('since', ''), request.args.get('until', '')
+        page = request.args.get('page', '1')
+        if (state not in ('', *STATES) or len(query) > 100 or
+            not re.fullmatch(r'[1-9][0-9]{0,6}', page, re.ASCII) or
+            (inverter_id and not re.fullmatch(r'[1-9][0-9]{0,9}', inverter_id, re.ASCII))):
+            abort(400, 'Некоректні фільтри історії.')
+        criteria = []
+        if state: criteria.append(StateEvent.state == state)
+        if query: criteria.append(StateEvent.inverter_name.icontains(query, autoescape=True))
+        if inverter_id: criteria.append(StateEvent.inverter_id == int(inverter_id))
+        start = date_filter(since) if since else None
+        end = date_filter(until, end=True) if until else None
+        if start is not None: criteria.append(StateEvent.occurred_at >= start)
+        if end is not None: criteria.append(StateEvent.occurred_at < end)
+        if start is not None and end is not None and start >= end:
+            abort(400, 'Початок періоду не може бути пізніше кінця.')
+        stmt = db.select(StateEvent).where(*criteria).order_by(StateEvent.id.desc())
+        events = db.session.scalars(stmt.offset((int(page)-1)*50).limit(51)).all()
+        selected = dict(state=state, q=query, inverter_id=inverter_id, since=since, until=until)
+        return render_template('history.html', events=events[:50], selected=selected,
+            states=STATES, page=int(page), has_next=len(events)>50,
+            previous_url=url_for('history', **selected, page=int(page)-1) if int(page)>1 else None,
+            next_url=url_for('history', **selected, page=int(page)+1) if len(events)>50 else None)
 
     def request_check(inverter):
         config = db.session.get(MonitorConfig, inverter.id)
@@ -186,10 +246,7 @@ def create_app(config=None):
     @app.post('/delete/<int:inverter_id>')
     @roles_required('Administrator')
     def delete_inverter(inverter_id):
-        remove_inverter(db.get_or_404(Inverter, inverter_id))
-        db.session.commit()
-        flash('Інвертор видалено.', 'info')
-        return redirect(url_for('index'))
+        return execute_control('delete', [db.get_or_404(Inverter, inverter_id)], 100)
 
     @app.post('/test/<int:inverter_id>')
     @roles_required(*CONTROL_ROLES)
@@ -224,19 +281,38 @@ def create_app(config=None):
             if len(values) != 1 or not re.fullmatch(r'(?:[1-9][0-9]?|100)', values[0], re.ASCII):
                 abort(400, 'Відсоток має бути цілим числом від 1 до 100.')
             value = int(values[0])
+        return execute_control(action, inverters, value)
+
+    def execute_control(action, inverters, value):
+        if action not in ('delete', 'test') and app.config['MODBUS_WRITES_ENABLED'] is not True:
+            abort(403, 'Modbus-записи заблоковано.')
+        if action != 'test':
+            payload = command_payload(g.user, action, value, inverters)
+            tokens = request.form.getlist('confirmation_token')
+            if not tokens:
+                confirmation = sign_confirmation(app.config['SECRET_KEY'], payload)
+                preview = [dict(id=inv.id, name=inv.name, ip_address=inv.ip_address) for inv in inverters]
+                if wants_json():
+                    return jsonify(confirmation_required=True, confirmation_token=confirmation,
+                                   action=action, label=ACTIONS[action], value=value, inverters=preview)
+                return render_template('confirmation.html', confirmation_token=confirmation,
+                    inverters=preview, action=action, label=ACTIONS[action], value=value)
+            if len(tokens) != 1:
+                abort(400, 'Неоднозначне підтвердження.')
+            verify_confirmation(app.config['SECRET_KEY'], tokens[0], payload)
+        results = []
         if action == 'delete':
             for inv in inverters:
+                results.append(dict(id=inv.id, name=inv.name, outcome='deleted', message='Інвертор видалено.'))
                 remove_inverter(inv)
             db.session.commit()
-            flash(f'Видалено {len(inverters)} інверторів.', 'info')
         elif action == 'test':
             for inv in inverters:
                 request_check(inv)
+                results.append(dict(id=inv.id, name=inv.name, outcome='queued',
+                                    message='Перевірку заплановано на наступний цикл монітора.'))
             db.session.commit()
-            flash('Перевірку заплановано на наступний цикл монітора.', 'info')
         else:
-            if app.config['MODBUS_WRITES_ENABLED'] is not True:
-                abort(403, 'Modbus-записи заблоковано.')
             for inv in inverters:
                 if action == 'on':
                     result = modbus_turn_on(inv.ip_address, allow_write=True)
@@ -244,8 +320,11 @@ def create_app(config=None):
                     result = modbus_turn_off(inv.ip_address, allow_write=True)
                 else:
                     result = modbus_limit_power(inv.ip_address, value=value, allow_write=True)
-                flash(f'{inv.name}: {result.message}', 'info' if result.confirmed else 'danger')
-        return redirect(url_for('index'))
+                results.append(dict(id=inv.id, name=inv.name,
+                    outcome='register_confirmed' if result.confirmed else 'unconfirmed', message=result.message))
+        if wants_json():
+            return jsonify(results=results)
+        return render_template('results.html', results=results)
 
     @app.cli.command('init-db')
     def init_db():

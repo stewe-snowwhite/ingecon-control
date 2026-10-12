@@ -1,10 +1,7 @@
-<!doctype html>
-<html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Вхід</title></head>
-<body><main><h1>Вхід до ingecon-control</h1>
-{% if error %}<p role="alert">{{ error }}</p>{% endif %}
-<form method="POST" action="{{ url_for('login') }}">
-<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-<label>Ім’я користувача <input name="username" required maxlength="64" autocomplete="username"></label>
-<label>Пароль <input name="password" type="password" required maxlength="1024" autocomplete="current-password"></label>
-<button type="submit">Увійти</button>
-</form></main></body></html>
+{% extends 'base.html' %}{% block title %}Вхід{% endblock %}
+{% block content %}<section class="surface narrow login-panel"><p class="eyebrow">ЗАХИЩЕНИЙ ДОСТУП</p><h1>Вхід до ingecon-control</h1><p class="muted">Увійдіть, щоб переглянути стан інверторів.</p>
+{% if error %}<p class="notice danger" role="alert">{{ error }}</p>{% endif %}
+<form method="POST" action="{{ url_for('login') }}" class="stacked-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<label>Ім’я користувача<input name="username" required maxlength="64" autocomplete="username" autofocus></label>
+<label>Пароль<input name="password" type="password" required maxlength="1024" autocomplete="current-password"></label><button class="button primary" type="submit">Увійти</button>
+</form></section>{% endblock %}

@@ -1,0 +1,10 @@
+{% extends 'base.html' %}{% block title %}Підтвердження дії{% endblock %}
+{% block content %}<section class="surface narrow"><p class="eyebrow">ПЕРЕВІРКА ДІЇ</p><h1>{{ label }}</h1>
+<p class="notice warning">{{ 'Видалення прибере інвертори зі списку. Історія переходів залишиться.' if action == 'delete' else 'Підтвердження запису регістра не підтверджує фізичний стан інвертора.' }}</p>
+{% if action == 'limit' %}<p>Обмеження потужності: <strong>{{ value }}%</strong></p>{% endif %}
+<ul>{% for inverter in inverters %}<li>{{ inverter.name }} · {{ inverter.ip_address }}</li>{% endfor %}</ul>
+<p class="muted">Перевірте список. Підтвердження дійсне 2 хвилини.</p>
+<form method="POST" action="{{ url_for('control_inverters') }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="confirmation_token" value="{{ confirmation_token }}"><input type="hidden" name="action" value="{{ action }}"><input type="hidden" name="limit_value" value="{{ value }}">
+{% for inverter in inverters %}<input type="hidden" name="selected_ids" value="{{ inverter.id }}">{% endfor %}
+<div class="button-row"><a href="{{ url_for('index') }}" class="button">Скасувати</a><button class="button primary" type="submit">Підтвердити: {{ label }}</button></div></form></section>{% endblock %}

@@ -1,0 +1,11 @@
+{% extends 'base.html' %}
+{% block title %}Результати дії{% endblock %}
+{% block content %}
+<section class="surface results">
+  <p class="eyebrow">ЗВІТ ЗА ПРИСТРОЯМИ</p>
+  <h1>Результати дії</h1>
+  <p class="muted">Запланована перевірка ще не підтверджує доступність. Запис регістра не підтверджує фізичний стан.</p>
+  <ul>{% for result in results %}<li class="{{ result.outcome }}"><strong>{{ result.name }}</strong>: {{ result.message }}</li>{% endfor %}</ul>
+  <a class="button primary" href="{{ url_for('index') }}">До огляду інверторів</a>
+</section>
+{% endblock %}

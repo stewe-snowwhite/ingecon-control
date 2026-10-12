@@ -1,5 +1,5 @@
 import pytest
-from tests.helpers import post
+from tests.helpers import post, confirmed_post
 
 def add(client,name='Mock A',group='A',ip='192.0.2.1'):
     return post(client, '/add',data=dict(name=name,group=group,ip=ip,login='',password=''))
@@ -15,7 +15,7 @@ def test_crud_groups_and_dashboard(web):
     assert client.get(f'/edit/{inv.id}').status_code==200
     post(client, f'/edit/{inv.id}',data=dict(name='Changed',group='C',ip='192.0.2.3',login='',password=''))
     assert module.db.session.get(module.Inverter,inv.id).name=='Changed'
-    assert post(client, f'/delete/{inv.id}').status_code==302
+    assert confirmed_post(client, f'/delete/{inv.id}').status_code==200
     assert module.Inverter.query.count()==1
 
 @pytest.mark.parametrize('action,value,expected', [('on',None,('write',1000,6,1)),
@@ -28,7 +28,7 @@ def test_selected_control(web,modbus,action,value,expected):
     inv=module.Inverter.query.filter_by(name='Mock A').one()
     data={'selected_ids':str(inv.id),'action':action}
     if value is not None: data['limit_value']=value
-    assert post(client, '/control',data=data).status_code==302
+    assert confirmed_post(client, '/control',data=data).status_code==200
     assert expected in clients[0].calls
     assert all(c.host=='192.0.2.1' for c in clients)
 
@@ -46,7 +46,7 @@ def test_test_and_bulk_delete(web,modbus):
     post(client, '/control',data={'selected_ids':ids,'action':'test'})
     assert clients == []
     assert all(c.requested_at is not None for c in module.MonitorConfig.query.all())
-    post(client, '/control',data={'selected_ids':ids,'action':'delete'})
+    confirmed_post(client, '/control',data={'selected_ids':ids,'action':'delete'})
     assert module.Inverter.query.count()==0
 
 def test_invalid_limit_must_not_write(web,modbus):

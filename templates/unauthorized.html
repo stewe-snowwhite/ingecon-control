@@ -1,2 +1,2 @@
-<!doctype html><html lang="uk"><head><meta charset="utf-8"><title>Потрібен вхід</title></head>
-<body><p>Потрібна авторизація.</p><a href="{{ url_for('login') }}">Увійти</a></body></html>
+{% extends 'base.html' %}{% block title %}Потрібен вхід{% endblock %}
+{% block content %}<section class="surface narrow"><p class="eyebrow">401 · ДОСТУП</p><h1>Потрібна авторизація</h1><p class="muted">Увійдіть або поновіть сесію, щоб продовжити.</p><a class="button primary" href="{{ url_for('login') }}">Увійти</a></section>{% endblock %}

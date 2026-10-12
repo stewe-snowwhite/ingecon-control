@@ -16,7 +16,7 @@ from monitoring import (NetworkProbes, Observation, ProbeResult, Target, apply_o
                         current_statuses, pending_notifications, target_for)
 from operation_locks import OperationBusy, endpoint_key, resource_lock
 from tests.fake_modbus import FakeModbusTcpClient, Response
-from tests.helpers import post
+from tests.helpers import post, confirmed_post
 
 
 @pytest.fixture
@@ -377,7 +377,7 @@ def test_delete_preserves_transition_history(web):
     inv=Inverter(name='Mock',group='A',ip_address='192.0.2.1')
     module.db.session.add(inv);module.db.session.commit()
     record(module.db.engine,observation(0,modbus=False))
-    assert post(client,'/delete/1').status_code==302
+    assert confirmed_post(client,'/delete/1').status_code==200
     assert module.db.session.get(InverterStatus,1) is None
     assert module.db.session.scalar(select(StateEvent.id)) == 1
 
@@ -533,7 +533,7 @@ def test_dashboard_renders_cached_measurements_without_polling(web, modbus):
     html = client.get('/').get_data(as_text=True)
     assert 'Online' in html and '100.0%' in html
     assert 'Остання успішна (UTC)' in html and 'Затримка Modbus (мс)' in html
-    assert 'Монітор неактивний' not in html and modbus[1] == []
+    assert 'class="badge online">Монітор активний' in html and modbus[1] == []
 
 
 def test_status_api_group_filter_is_db_only(web,modbus):
@@ -563,7 +563,7 @@ def test_delete_respects_foreign_keys_and_keeps_history(web):
     module.db.session.execute(text('PRAGMA foreign_keys=ON'))
     module.db.session.commit()
     assert module.db.session.scalar(text('PRAGMA foreign_keys')) == 1
-    assert post(client,'/delete/1').status_code == 302
+    assert confirmed_post(client,'/delete/1').status_code == 200
     assert module.db.session.get(InverterStatus,1) is None
     assert module.db.session.get(MonitorConfig,1) is None
     assert module.db.session.scalar(select(StateEvent.id)) == 1

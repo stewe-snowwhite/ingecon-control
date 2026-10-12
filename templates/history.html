@@ -1,0 +1,13 @@
+{% extends 'base.html' %}{% block title %}Історія подій{% endblock %}
+{% block content %}<div class="page-heading"><div><p class="eyebrow">ЖУРНАЛ МОНІТОРИНГУ</p><h1>Історія подій</h1><p class="muted">Переходи станів інверторів. Час у UTC.</p></div></div>
+<section class="surface"><form class="filters history-filters" method="GET">
+<label>Назва інвертора<input type="search" name="q" value="{{ selected.q }}" maxlength="100"></label>
+<label>ID інвертора<input type="number" name="inverter_id" value="{{ selected.inverter_id }}" min="1" max="9999999999"></label>
+<label>Новий стан<select name="state"><option value="">Усі стани</option>{% for state in states %}<option {% if selected.state == state %}selected{% endif %}>{{ state }}</option>{% endfor %}</select></label>
+<label>Від (UTC)<input type="date" name="since" value="{{ selected.since }}"></label><label>До (UTC, включно)<input type="date" name="until" value="{{ selected.until }}"></label>
+<button class="button" type="submit">Застосувати</button><a class="button subtle" href="{{ url_for('history') }}">Скинути</a></form>
+{% if events %}<div class="table-wrap"><table class="history-table"><thead><tr><th>Час (UTC)</th><th>Інвертор</th><th>Перехід</th><th>Причина</th></tr></thead><tbody>
+{% for event in events %}<tr><td data-label="Час (UTC)" class="mono">{{ event.occurred_at | utc_time }}</td><td data-label="Інвертор"><strong>{{ event.inverter_name }}</strong><small class="muted">ID {{ event.inverter_id }} · Подія #{{ event.id }}</small></td><td data-label="Перехід"><span class="badge {{ event.previous_state | lower }}">{{ event.previous_state }}</span> → <span class="badge {{ event.state | lower }}">{{ event.state }}</span></td><td data-label="Причина">{{ event.reason | monitor_reason or '—' }}</td></tr>{% endfor %}
+</tbody></table></div>{% else %}<p class="empty-state">Подій за цими фільтрами немає.</p>{% endif %}
+<nav class="pagination" aria-label="Сторінки історії">{% if previous_url %}<a class="button" href="{{ previous_url }}">← Попередня</a>{% endif %}<span>Сторінка {{ page }} · до 50 подій</span>{% if next_url %}<a class="button" href="{{ next_url }}">Наступна →</a>{% endif %}</nav>
+</section>{% endblock %}

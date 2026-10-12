@@ -1,0 +1,12 @@
+{% extends 'base.html' %}{% block title %}{{ 'Редагувати інвертор' if inverter is defined else 'Додати інвертор' }}{% endblock %}
+{% block content %}<section class="surface narrow"><p class="eyebrow">ОБЛІК ПРИСТРОЇВ</p><h1>{{ 'Редагувати інвертор' if inverter is defined else 'Додати інвертор' }}</h1><p class="muted">{{ inverter.name if inverter is defined else 'Додайте пристрій та його групу.' }}</p>
+<form method="POST" class="stacked-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<label for="name">Назва<input id="name" name="name" required maxlength="100" value="{{ inverter.name if inverter is defined else '' }}"></label>
+<label for="group_input">Група<input id="group_input" name="group" list="group-options" required maxlength="100" value="{{ inverter.group if inverter is defined else '' }}" placeholder="Виберіть наявну або введіть нову групу"></label>
+<datalist id="group-options">{% for group in groups %}<option value="{{ group }}">{% endfor %}</datalist>
+<label for="ip">IP-адреса<input id="ip" name="ip" required maxlength="100" value="{{ inverter.ip_address if inverter is defined else '' }}" autocomplete="off"></label>
+<label for="login">Логін інвертора<input id="login" name="login" maxlength="100" value="{{ (inverter.login or '') if inverter is defined else '' }}" autocomplete="off"></label>
+<label for="password">Новий пароль інвертора<input id="password" name="password" type="password" maxlength="100" autocomplete="new-password" placeholder="{{ 'Залиште порожнім, щоб зберегти поточний' if inverter is defined else 'За потреби' }}"></label>
+<div class="button-row"><a class="button" href="{{ url_for('index') }}">Назад</a><button class="button primary" type="submit">{{ 'Зберегти' if inverter is defined else 'Додати' }}</button></div></form>
+{% if inverter is defined %}<hr><form method="POST" action="{{ url_for('delete_inverter', inverter_id=inverter.id) }}" data-command><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="button danger-outline">Видалити інвертор</button></form><section id="command-results" class="results" aria-live="polite" hidden><h2>Результат</h2><ul id="result-list"></ul></section>{% include 'command_dialog.html' %}{% endif %}
+</section>{% endblock %}

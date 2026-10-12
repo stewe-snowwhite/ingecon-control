@@ -1,0 +1,2 @@
+{% extends 'base.html' %}{% block title %}Помилка {{ code }}{% endblock %}
+{% block content %}<section class="surface narrow"><p class="eyebrow">{{ code }} · ПОМИЛКА</p><h1>Запит не виконано</h1><p class="notice danger" role="alert">{{ message }}</p><a href="{{ url_for('index') if g.user else url_for('login') }}" class="button">{{ 'До огляду' if g.user else 'Увійти' }}</a></section>{% endblock %}
