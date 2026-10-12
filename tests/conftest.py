@@ -2,6 +2,7 @@ import importlib
 import logging
 import socket
 import sys
+import subprocess
 
 import pytest
 from flask import g
@@ -17,6 +18,8 @@ def isolation(monkeypatch, tmp_path):
     monkeypatch.setattr(socket.socket, 'connect_ex', forbidden)
     monkeypatch.setattr(socket, 'create_connection', forbidden)
     monkeypatch.setattr(socket, 'getaddrinfo', forbidden)
+    monkeypatch.setattr(subprocess, 'run', forbidden)
+    monkeypatch.setenv('INGECON_LOCK_DIR', str(tmp_path / 'locks'))
     monkeypatch.setattr(logging, 'basicConfig', lambda **kwargs: None)
     monkeypatch.setenv('INGECON_DATABASE_URI', 'sqlite:///:memory:')
     monkeypatch.setenv('INGECON_SECRET_KEY', 'test-only-random-looking-key-32-chars')

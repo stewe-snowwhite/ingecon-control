@@ -14,6 +14,7 @@
   {% include "session_bar.html" %}
   <div class="container my-4">
     <h1 class="text-center mb-4">Підключені пристрої</h1>
+    {% if not monitor.alive %}<p class="alert alert-warning">Монітор неактивний або дані застарілі. Статуси показано як Unknown.</p>{% endif %}
 
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
@@ -51,6 +52,9 @@
                     <th>IP-адреса</th>
                     <th>Статус</th>
                     <th>Обмеження (%)</th>
+                    <th>Остання перевірка (UTC)</th>
+                    <th>Остання успішна (UTC)</th>
+                    <th>Затримка Modbus (мс)</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -61,11 +65,9 @@
                     <td>{{ inverter.group }}</td>
                     <td>{{ inverter.ip_address }}</td>
                     <td>
-                      {% if inverter.is_online %}
-                        <span class="badge bg-success">Онлайн</span>
-                      {% else %}
-                        <span class="badge bg-secondary">Офлайн</span>
-                      {% endif %}
+                      <span class="badge bg-{{ 'success' if inverter.state == 'Online' else 'danger' if inverter.state == 'Offline' else 'warning text-dark' if inverter.state == 'Degraded' else 'secondary' }}">{{ inverter.state }}</span>
+                      {% if inverter.stale %}<small>Застарілі дані</small>{% endif %}
+                      {% if inverter.reason %}<small class="d-block text-muted">{{ inverter.reason | monitor_reason }}</small>{% endif %}
                     </td>
                     <td>
                       {% if inverter.power_limit_percent is not none %}
@@ -74,6 +76,9 @@
                         <span class="text-muted">—</span>
                       {% endif %}
                     </td>
+                    <td>{{ inverter.checked_at | utc_time }}</td>
+                    <td>{{ inverter.last_success_at | utc_time }}</td>
+                    <td>{{ inverter.latency_ms if inverter.latency_ms is not none else '—' }}</td>
                   </tr>
                   {% endfor %}
                 </tbody>

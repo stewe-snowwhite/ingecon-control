@@ -11,7 +11,7 @@ def test_crud_groups_and_dashboard(web):
     inv=module.Inverter.query.filter_by(name='Mock A').one()
     body=client.get('/?group=A').get_data(as_text=True)
     assert 'Mock A' in body and 'Mock B' not in body
-    assert '100.0%' in body
+    assert 'Unknown' in body
     assert client.get(f'/edit/{inv.id}').status_code==200
     post(client, f'/edit/{inv.id}',data=dict(name='Changed',group='C',ip='192.0.2.3',login='',password=''))
     assert module.db.session.get(module.Inverter,inv.id).name=='Changed'
@@ -44,7 +44,8 @@ def test_test_and_bulk_delete(web,modbus):
     add(client); add(client,'Mock B')
     ids=[str(inv.id) for inv in module.Inverter.query.all()]
     post(client, '/control',data={'selected_ids':ids,'action':'test'})
-    assert len(clients)==2 and all(c.calls==[('connect',)] for c in clients)
+    assert clients == []
+    assert all(c.requested_at is not None for c in module.MonitorConfig.query.all())
     post(client, '/control',data={'selected_ids':ids,'action':'delete'})
     assert module.Inverter.query.count()==0
 
@@ -70,5 +71,5 @@ def test_single_device_connection_test(web, modbus):
     add(client)
     inv = module.Inverter.query.first()
     assert post(client, f'/test/{inv.id}').status_code == 302
-    assert len(clients) == 1
-    assert clients[0].calls == [('connect',)]
+    assert clients == []
+    assert module.db.session.get(module.MonitorConfig, inv.id).requested_at is not None

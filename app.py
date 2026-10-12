@@ -1,18 +1,19 @@
 import ipaddress
 import os
 import re
-from datetime import timedelta
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import click
 from flask import (Flask, abort, flash, g, redirect, render_template, request,
-                   send_file, session, url_for)
+                   send_file, session, url_for, jsonify)
 from flask.helpers import get_debug_flag
 from flask_wtf.csrf import CSRFProtect
 
-from models import db, Inverter, ROLES, User
-from modbus_utils import (check_modbus_connection, modbus_limit_power,
-                          modbus_turn_off, modbus_turn_on, read_command_status)
+from models import db, Inverter, ROLES, User, MonitorConfig, InverterStatus
+from monitoring import current_statuses, Target, explain_reason
+from modbus_utils import modbus_limit_power, modbus_turn_off, modbus_turn_on
 from security import authenticate, load_user, log_failure, reserve_login_attempt, roles_required
 
 csrf = CSRFProtect()
@@ -34,6 +35,7 @@ def create_app(config=None):
         SESSION_REFRESH_EACH_REQUEST=False,
         MAX_CONTENT_LENGTH=64 * 1024,
         MODBUS_WRITES_ENABLED=False,
+        MONITOR_STALE_AFTER_SECONDS=None,
         LOGIN_IP_LIMIT=20,
         LOGIN_ACCOUNT_LIMIT=5,
         LOGIN_WINDOW_SECONDS=300,
@@ -48,6 +50,11 @@ def create_app(config=None):
     db.init_app(app)
     app.before_request(load_user)
     csrf.init_app(app)
+    app.jinja_env.filters['monitor_reason'] = explain_reason
+    app.jinja_env.filters['utc_time'] = lambda value: (
+        datetime.fromtimestamp(value, timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+        if value is not None else '—'
+    )
 
     @app.after_request
     def security_headers(response):
@@ -108,19 +115,29 @@ def create_app(config=None):
     def index():
         selected_group = request.args.get('group')
         groups = db.session.scalars(db.select(Inverter.group).distinct()).all()
-        stmt = db.select(Inverter)
-        if selected_group:
-            stmt = stmt.where(Inverter.group == selected_group)
-        inverters = db.session.scalars(stmt).all()
-        for inv in inverters:
-            inv.is_online = check_modbus_connection(inv.ip_address, timeout=1)
-            cmd, raw_limit = read_command_status(inv.ip_address)
-            inv.power_limit_percent = (
-                round(raw_limit / 32767 * 100, 1)
-                if cmd == 16 and type(raw_limit) is int and 0 <= raw_limit <= 32767 else None
-            )
-        return render_template('index.html', inverters=inverters, groups=groups,
-                               selected_group=selected_group)
+        snapshot = current_statuses(db.session, group=selected_group,
+                                    stale_after=app.config['MONITOR_STALE_AFTER_SECONDS'])
+        return render_template('index.html', inverters=snapshot['inverters'], groups=groups,
+                               selected_group=selected_group, monitor=snapshot['monitor'])
+
+    @app.get('/api/statuses')
+    @roles_required(*ALL_ROLES)
+    def statuses():
+        return jsonify(current_statuses(db.session, group=request.args.get('group'),
+                                        stale_after=app.config['MONITOR_STALE_AFTER_SECONDS']))
+
+    def request_check(inverter):
+        config = db.session.get(MonitorConfig, inverter.id)
+        if config is None:
+            config = MonitorConfig(inverter_id=inverter.id)
+            db.session.add(config)
+        config.requested_at = time.time()
+
+    def remove_inverter(inverter):
+        # Keep StateEvent history/outbox, remove only current configuration/status.
+        for model in (MonitorConfig, InverterStatus):
+            db.session.execute(db.delete(model).where(model.inverter_id == inverter.id))
+        db.session.delete(inverter)
 
     def inverter_fields():
         fields = {key: request.form.get(key, '').strip() for key in ('name', 'group', 'ip', 'login')}
@@ -169,7 +186,7 @@ def create_app(config=None):
     @app.post('/delete/<int:inverter_id>')
     @roles_required('Administrator')
     def delete_inverter(inverter_id):
-        db.session.delete(db.get_or_404(Inverter, inverter_id))
+        remove_inverter(db.get_or_404(Inverter, inverter_id))
         db.session.commit()
         flash('Інвертор видалено.', 'info')
         return redirect(url_for('index'))
@@ -178,8 +195,9 @@ def create_app(config=None):
     @roles_required(*CONTROL_ROLES)
     def test_connection(inverter_id):
         inv = db.get_or_404(Inverter, inverter_id)
-        online = check_modbus_connection(inv.ip_address)
-        flash(f'{inv.name}: TCP-з’єднання ' + ('доступне.' if online else 'недоступне.'), 'info')
+        request_check(inv)
+        db.session.commit()
+        flash(f'{inv.name}: перевірку заплановано на наступний цикл монітора.', 'info')
         return redirect(url_for('index'))
 
     @app.post('/control')
@@ -208,13 +226,14 @@ def create_app(config=None):
             value = int(values[0])
         if action == 'delete':
             for inv in inverters:
-                db.session.delete(inv)
+                remove_inverter(inv)
             db.session.commit()
             flash(f'Видалено {len(inverters)} інверторів.', 'info')
         elif action == 'test':
             for inv in inverters:
-                online = check_modbus_connection(inv.ip_address)
-                flash(f'{inv.name}: TCP-з’єднання ' + ('доступне.' if online else 'недоступне.'), 'info')
+                request_check(inv)
+            db.session.commit()
+            flash('Перевірку заплановано на наступний цикл монітора.', 'info')
         else:
             if app.config['MODBUS_WRITES_ENABLED'] is not True:
                 abort(403, 'Modbus-записи заблоковано.')
@@ -233,6 +252,32 @@ def create_app(config=None):
         """Explicit schema initialization; back up existing databases first."""
         db.create_all()
         click.echo('Схему створено. Наявні записи не змінено.')
+
+    @app.cli.command('configure-monitor')
+    @click.argument('inverter_id', type=int)
+    @click.option('--port', type=click.IntRange(1, 65535), default=502)
+    @click.option('--device-id', type=click.IntRange(1, 255), default=1)
+    @click.option('--read-address', type=click.IntRange(0, 65535), required=True)
+    @click.option('--read-count', type=click.IntRange(1, 125), default=1)
+    @click.option('--profile', type=click.Choice(['generic', 'legacy_ingeteam']), default='generic')
+    def configure_monitor(inverter_id, port, device_id, read_address, read_count, profile):
+        """Configure a documented read register for this specific inverter; no network."""
+        inverter = db.session.get(Inverter, inverter_id)
+        if inverter is None:
+            raise click.ClickException('Інвертор не знайдено.')
+        target = Target(inverter_id, inverter.ip_address, port, device_id, read_address, read_count, profile)
+        try:
+            target.validate()
+        except ValueError as error:
+            raise click.ClickException(str(error)) from error
+        config = db.session.get(MonitorConfig, inverter_id)
+        if config is None:
+            config = MonitorConfig(inverter_id=inverter_id)
+            db.session.add(config)
+        for field in ('port', 'device_id', 'read_address', 'read_count', 'profile'):
+            setattr(config, field, getattr(target, field))
+        db.session.commit()
+        click.echo('Профіль читання збережено без підключення до інвертора.')
 
     @app.cli.command('create-user')
     @click.argument('username')

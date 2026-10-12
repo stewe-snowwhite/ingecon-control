@@ -7,6 +7,7 @@ import logging
 from dataclasses import dataclass
 
 from pymodbus.client import ModbusTcpClient
+from operation_locks import serialized_modbus
 
 log = logging.getLogger(__name__)
 
@@ -17,6 +18,7 @@ class CommandResult:
     message: str
 
 
+@serialized_modbus(1, lambda: False)
 def check_modbus_connection(ip_address, port=502, timeout=2):
     client = None
     try:
@@ -56,20 +58,24 @@ def _write_and_verify(ip, address, value, port, allow_write):
             client.close()
 
 
+@serialized_modbus(1, lambda: CommandResult(False, 'Modbus-операція вже виконується.'))
 def modbus_turn_on(ip, port=502, *, allow_write=False):
     return _write_and_verify(ip, 1000, 6, port, allow_write)
 
 
+@serialized_modbus(1, lambda: CommandResult(False, 'Modbus-операція вже виконується.'))
 def modbus_turn_off(ip, port=502, *, allow_write=False):
     return _write_and_verify(ip, 1000, 5, port, allow_write)
 
 
+@serialized_modbus(2, lambda: CommandResult(False, 'Modbus-операція вже виконується.'))
 def modbus_limit_power(ip, value=50, port=502, *, allow_write=False):
     if type(value) is not int or not 1 <= value <= 100:
         return CommandResult(False, 'Відсоток має бути цілим числом від 1 до 100.')
     return _write_and_verify(ip, 46, value, port, allow_write)
 
 
+@serialized_modbus(1, lambda: (None, None))
 def read_command_status(ip, port=502):
     client = None
     try:
