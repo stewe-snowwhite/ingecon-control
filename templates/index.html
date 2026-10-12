@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
 </head>
 <body>
+  {% include "session_bar.html" %}
   <div class="container my-4">
     <h1 class="text-center mb-4">Підключені пристрої</h1>
 
@@ -35,7 +36,8 @@
       </select>
     </form>
 
-    <form method="POST" action="/control">
+    <form method="POST" action="{{ url_for('control_inverters') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       {% if inverters %}
         <div class="row justify-content-center">
           <div class="col-12 col-md-10">
@@ -54,8 +56,8 @@
                 <tbody>
                   {% for inverter in inverters %}
                   <tr>
-                    <td><input type="checkbox" name="selected_ids" value="{{ inverter.id }}"></td>
-                    <td><a href="{{ url_for('edit_inverter', inverter_id=inverter.id) }}">{{ inverter.name }}</a></td>
+                    <td>{% if g.user.role != "Viewer" %}<input type="checkbox" name="selected_ids" value="{{ inverter.id }}">{% endif %}</td>
+                    <td>{% if g.user.role == "Administrator" %}<a href="{{ url_for('edit_inverter', inverter_id=inverter.id) }}">{{ inverter.name }}</a>{% else %}{{ inverter.name }}{% endif %}</td>
                     <td>{{ inverter.group }}</td>
                     <td>{{ inverter.ip_address }}</td>
                     <td>
@@ -80,9 +82,10 @@
           </div>
         </div>
 
+        {% if g.user.role != "Viewer" %}
         <div id="actions" class="text-center mt-3" style="display: none;">
-          <button type="submit" name="action" value="on" class="btn btn-success me-2">🔌 Увімкнути</button>
-          <button type="submit" name="action" value="off" class="btn btn-danger me-2">⛔ Вимкнути</button>
+          <button {% if not config.MODBUS_WRITES_ENABLED %}disabled{% endif %} type="submit" name="action" value="on" class="btn btn-success me-2">🔌 Увімкнути</button>
+          <button {% if not config.MODBUS_WRITES_ENABLED %}disabled{% endif %} type="submit" name="action" value="off" class="btn btn-danger me-2">⛔ Вимкнути</button>
 
           <div class="mb-2">
             <label for="limit_value" class="form-label">Значення обмеження (%):</label>
@@ -91,11 +94,11 @@
           </div>
 
           <div class="mb-3">
-            <button type="submit" name="action" value="limit" class="btn btn-warning me-2">
+            <button {% if not config.MODBUS_WRITES_ENABLED %}disabled{% endif %} type="submit" name="action" value="limit" class="btn btn-warning me-2">
               ⚡ Обмежити потужність
             </button>
 
-            <button type="submit" name="action" value="limit_max" class="btn btn-outline-primary">
+            <button {% if not config.MODBUS_WRITES_ENABLED %}disabled{% endif %} type="submit" name="action" value="limit_max" class="btn btn-outline-primary">
               🔄 Повернути максимум
             </button>
           </div>
@@ -103,25 +106,32 @@
           <button type="submit" name="action" value="test" class="btn btn-info me-2">
             🔍 Перевірити підключення
           </button>
+          {% if g.user.role == "Administrator" %}
           <button type="submit" name="action" value="delete"
                   onclick="return confirm('⚠️ Ви впевнені, що хочете видалити вибрані інвертори?');"
                   class="btn btn-outline-danger">
             🗑️ Видалити
           </button>
+          {% endif %}
         </div>
+        {% endif %}
       {% else %}
         <p class="text-center">Інвертори не знайдені.</p>
       {% endif %}
     </form>
 
+    {% if g.user.role == "Administrator" %}
     <div class="text-center mt-4">
       <a href="{{ url_for('add_inverter') }}" class="btn btn-primary">➕ Додати інвертор</a>
     </div>
+    {% endif %}
   </div>
 
+  {% if g.user.role == "Administrator" %}
   <a href="{{ url_for('download_log') }}" class="btn btn-outline-dark mt-3">
     📄 Переглянути журнал
   </a>
+  {% endif %}
 
   <script>
     const checkboxes = document.querySelectorAll('input[name="selected_ids"]');

@@ -1,186 +1,262 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, send_file
-from flask_sqlalchemy import SQLAlchemy
-from modbus_utils import (
-    check_modbus_connection,
-    modbus_turn_on,
-    modbus_turn_off,
-    modbus_limit_power,
-    read_command_status
-)
+import ipaddress
 import os
+import re
+from datetime import timedelta
+from pathlib import Path
 
-app = Flask(__name__)
-app.secret_key = 'supersecretkey'
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
-    'INGECON_DATABASE_URI', 'sqlite:///database.db'
-)
-db = SQLAlchemy(app)
+import click
+from flask import (Flask, abort, flash, g, redirect, render_template, request,
+                   send_file, session, url_for)
+from flask.helpers import get_debug_flag
+from flask_wtf.csrf import CSRFProtect
 
-# Модель інвертора
-class Inverter(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    group = db.Column(db.String(100), nullable=False)
-    ip_address = db.Column(db.String(100), nullable=False)
-    login = db.Column(db.String(100), nullable=True)
-    password = db.Column(db.String(100), nullable=True)
+from models import db, Inverter, ROLES, User
+from modbus_utils import (check_modbus_connection, modbus_limit_power,
+                          modbus_turn_off, modbus_turn_on, read_command_status)
+from security import authenticate, load_user, log_failure, reserve_login_attempt, roles_required
 
-@app.route('/download-log')
-def download_log():
-    return send_file('modbus.log', as_attachment=True)
+csrf = CSRFProtect()
+ALL_ROLES = ROLES
+CONTROL_ROLES = ('Administrator', 'Operator')
+USERNAME = re.compile(r'[a-z0-9_.-]{1,64}', re.ASCII)
 
-@app.route('/')
-def index():
-    selected_group = request.args.get('group')
-    groups = db.session.query(Inverter.group).distinct().all()
-    groups = [g[0] for g in groups]
 
-    if selected_group:
-        inverters = Inverter.query.filter_by(group=selected_group).all()
-    else:
-        inverters = Inverter.query.all()
-
-    for inv in inverters:
-        inv.is_online = check_modbus_connection(inv.ip_address, timeout=1)
-
-        try:
-            cmd, raw_limit = read_command_status(inv.ip_address)
-            if cmd == 16:
-                percent = round(raw_limit / 32767 * 100, 1)
-                inv.power_limit_percent = percent
-            else:
-                inv.power_limit_percent = None
-        except Exception:
-            inv.power_limit_percent = None
-
-    return render_template(
-        "index.html",
-        inverters=inverters,
-        groups=groups,
-        selected_group=selected_group
+def create_app(config=None):
+    app = Flask(__name__, static_folder=None)
+    app.config.from_mapping(
+        SECRET_KEY=os.environ.get('INGECON_SECRET_KEY'),
+        SQLALCHEMY_DATABASE_URI=os.environ.get('INGECON_DATABASE_URI', 'sqlite:///database.db'),
+        DEBUG=False,
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SECURE=True,
+        SESSION_COOKIE_SAMESITE='Lax',
+        PERMANENT_SESSION_LIFETIME=timedelta(minutes=30),
+        SESSION_REFRESH_EACH_REQUEST=False,
+        MAX_CONTENT_LENGTH=64 * 1024,
+        MODBUS_WRITES_ENABLED=False,
+        LOGIN_IP_LIMIT=20,
+        LOGIN_ACCOUNT_LIMIT=5,
+        LOGIN_WINDOW_SECONDS=300,
+        MODBUS_LOG_PATH=str(Path(app.root_path) / 'modbus.log'),
     )
+    if config:
+        app.config.update(config)
+    if not isinstance(app.config['SECRET_KEY'], str) or len(app.config['SECRET_KEY']) < 32:
+        raise RuntimeError('Set INGECON_SECRET_KEY to a random secret of at least 32 characters.')
+    if app.debug or get_debug_flag():
+        raise RuntimeError('Debug mode is forbidden.')
+    db.init_app(app)
+    app.before_request(load_user)
+    csrf.init_app(app)
 
+    @app.after_request
+    def security_headers(response):
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['Referrer-Policy'] = 'same-origin'
+        # Existing Bootstrap CDN and inline JS retained until the dashboard stage.
+        response.headers['Content-Security-Policy'] = "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"
+        return response
 
-@app.route('/add', methods=['GET', 'POST'])
-def add_inverter():
-    if request.method == 'POST':
-        name = request.form['name']
-        group = request.form['group']
-        ip = request.form['ip']
-        login = request.form['login']
-        password = request.form['password']
+    @app.errorhandler(401)
+    def login_required(error):
+        return render_template('unauthorized.html'), 401
 
-        new_inv = Inverter(name=name, group=group, ip_address=ip, login=login, password=password)
-        db.session.add(new_inv)
+    @app.route('/login', methods=['GET', 'POST'])
+    def login():
+        if request.method == 'GET':
+            return render_template('login.html')
+        username = request.form.get('username', '').strip().lower()
+        password = request.form.get('password', '')
+        # Bound input before expensive hashing; malformed names use a fixed bucket.
+        if not USERNAME.fullmatch(username):
+            username = '<invalid>'
+        retry_after = reserve_login_attempt(username)
+        if retry_after:
+            log_failure('rate_limited')
+            return render_template('login.html', error='Забагато спроб. Спробуйте пізніше.'), 429, {'Retry-After': str(retry_after)}
+        user = authenticate(username, password) if len(password) <= 1024 else None
+        if user is None:
+            log_failure('invalid_credentials')
+            return render_template('login.html', error='Неправильні облікові дані.'), 401
+        session.clear()
+        session.permanent = True
+        session['user_id'] = user.id
+        session['session_version'] = user.session_version
+        return redirect(url_for('index'))
+
+    @app.post('/logout')
+    @roles_required(*ALL_ROLES)
+    def logout():
+        # Revoke signed cookies for every session of this user, including copies.
+        g.user.session_version += 1
         db.session.commit()
-        flash('Інвертор додано без перевірки підключення.', 'info')
-        return redirect(url_for('index'))
+        session.clear()
+        return redirect(url_for('login'))
 
-    groups = db.session.query(Inverter.group).distinct().all()
-    groups = [g[0] for g in groups]
-    return render_template("add_inverter.html", groups=groups)
+    @app.get('/download-log')
+    @roles_required('Administrator')
+    def download_log():
+        path = Path(app.config['MODBUS_LOG_PATH'])
+        if not path.is_file():
+            abort(404)
+        return send_file(path, as_attachment=True)
 
-@app.route('/test/<int:inverter_id>')
-def test_connection(inverter_id):
-    inverter = Inverter.query.get_or_404(inverter_id)
-    result = check_modbus_connection(inverter.ip_address)
-    if result:
-        flash(f'Інвертор {inverter.name} ({inverter.ip_address}) доступний по Modbus TCP.', 'success')
-    else:
-        flash(f'Інвертор {inverter.name} ({inverter.ip_address}) недоступний по Modbus TCP.', 'danger')
-    return redirect(url_for('index'))
-
-@app.route('/control', methods=['POST'])
-def control_inverters():
-    selected_ids = request.form.getlist('selected_ids')
-    action = request.form.get('action')
-
-    if not selected_ids:
-        flash("Не вибрано жодного інвертора.", "warning")
-        return redirect(url_for('index'))
-
-    if not action:
-        flash("Не вказано дію. Можливо, форма була відправлена некоректно.", "danger")
-        return redirect(url_for('index'))
-
-    inverters = Inverter.query.filter(Inverter.id.in_(selected_ids)).all()
-
-    if action == "test":
+    @app.get('/')
+    @roles_required(*ALL_ROLES)
+    def index():
+        selected_group = request.args.get('group')
+        groups = db.session.scalars(db.select(Inverter.group).distinct()).all()
+        stmt = db.select(Inverter)
+        if selected_group:
+            stmt = stmt.where(Inverter.group == selected_group)
+        inverters = db.session.scalars(stmt).all()
         for inv in inverters:
-            result = check_modbus_connection(inv.ip_address)
-            if result:
-                flash(f'✅ {inv.name} ({inv.ip_address}) — доступний', 'success')
-            else:
-                flash(f'❌ {inv.name} ({inv.ip_address}) — недоступний', 'danger')
-        return redirect(url_for('index'))
+            inv.is_online = check_modbus_connection(inv.ip_address, timeout=1)
+            cmd, raw_limit = read_command_status(inv.ip_address)
+            inv.power_limit_percent = (
+                round(raw_limit / 32767 * 100, 1)
+                if cmd == 16 and type(raw_limit) is int and 0 <= raw_limit <= 32767 else None
+            )
+        return render_template('index.html', inverters=inverters, groups=groups,
+                               selected_group=selected_group)
 
-    if action == "delete":
-        count = 0
-        for inv in inverters:
-            db.session.delete(inv)
-            count += 1
+    def inverter_fields():
+        fields = {key: request.form.get(key, '').strip() for key in ('name', 'group', 'ip', 'login')}
+        if any(not fields[key] or len(fields[key]) > 100 for key in ('name', 'group', 'ip')):
+            abort(400, 'Назва, група та IP обов’язкові; максимум 100 символів.')
+        try:
+            address = ipaddress.ip_address(fields['ip'])
+            if address.is_multicast or address.is_unspecified or address.is_loopback:
+                raise ValueError
+        except ValueError:
+            abort(400, 'Некоректна адреса інвертора.')
+        password = request.form.get('password', '')
+        if len(fields['login']) > 100 or len(password) > 100:
+            abort(400, 'Завеликі облікові дані інвертора.')
+        return dict(name=fields['name'], group=fields['group'], ip_address=str(address),
+                    login=fields['login'], password=password)
+
+    @app.route('/add', methods=['GET', 'POST'])
+    @roles_required('Administrator')
+    def add_inverter():
+        if request.method == 'POST':
+            db.session.add(Inverter(**inverter_fields()))
+            db.session.commit()
+            flash('Інвертор додано без перевірки підключення.', 'info')
+            return redirect(url_for('index'))
+        groups = db.session.scalars(db.select(Inverter.group).distinct()).all()
+        return render_template('add_inverter.html', groups=groups)
+
+    @app.route('/edit/<int:inverter_id>', methods=['GET', 'POST'])
+    @roles_required('Administrator')
+    def edit_inverter(inverter_id):
+        inverter = db.get_or_404(Inverter, inverter_id)
+        if request.method == 'POST':
+            fields = inverter_fields()
+            # Blank password means retain current value; never send it back to HTML.
+            if not fields['password']:
+                fields.pop('password')
+            for key, value in fields.items():
+                setattr(inverter, key, value)
+            db.session.commit()
+            flash('Інвертор оновлено.', 'info')
+            return redirect(url_for('index'))
+        groups = db.session.scalars(db.select(Inverter.group).distinct()).all()
+        return render_template('edit_inverter.html', inverter=inverter, groups=groups)
+
+    @app.post('/delete/<int:inverter_id>')
+    @roles_required('Administrator')
+    def delete_inverter(inverter_id):
+        db.session.delete(db.get_or_404(Inverter, inverter_id))
         db.session.commit()
-        flash(f"🗑️ Видалено {count} інвертор(ів).", "info")
+        flash('Інвертор видалено.', 'info')
         return redirect(url_for('index'))
 
-    for inv in inverters:
-        print(f"👉 {action.upper()} → {inv.name} ({inv.ip_address})")
+    @app.post('/test/<int:inverter_id>')
+    @roles_required(*CONTROL_ROLES)
+    def test_connection(inverter_id):
+        inv = db.get_or_404(Inverter, inverter_id)
+        online = check_modbus_connection(inv.ip_address)
+        flash(f'{inv.name}: TCP-з’єднання ' + ('доступне.' if online else 'недоступне.'), 'info')
+        return redirect(url_for('index'))
 
-        if action == "on":
-            modbus_turn_on(inv.ip_address)
+    @app.post('/control')
+    @roles_required(*CONTROL_ROLES)
+    def control_inverters():
+        actions = request.form.getlist('action')
+        if len(actions) != 1 or actions[0] not in ('on', 'off', 'limit', 'limit_max', 'test', 'delete'):
+            abort(400, 'Невідома або неоднозначна команда.')
+        action = actions[0]
+        if action == 'delete' and g.user.role != 'Administrator':
+            abort(403)
+        raw_ids = request.form.getlist('selected_ids')
+        if not raw_ids or len(raw_ids) > 100 or any(not re.fullmatch(r'[1-9][0-9]{0,9}', x, re.ASCII) for x in raw_ids):
+            abort(400, 'Некоректний список інверторів.')
+        ids = [int(x) for x in raw_ids]
+        if len(ids) != len(set(ids)):
+            abort(400, 'Повторні ID не дозволені.')
+        inverters = db.session.scalars(db.select(Inverter).where(Inverter.id.in_(ids)).order_by(Inverter.id)).all()
+        if len(inverters) != len(ids):
+            abort(400, 'Список містить невідомі інвертори.')
+        value = 100
+        if action == 'limit':
+            values = request.form.getlist('limit_value')
+            if len(values) != 1 or not re.fullmatch(r'(?:[1-9][0-9]?|100)', values[0], re.ASCII):
+                abort(400, 'Відсоток має бути цілим числом від 1 до 100.')
+            value = int(values[0])
+        if action == 'delete':
+            for inv in inverters:
+                db.session.delete(inv)
+            db.session.commit()
+            flash(f'Видалено {len(inverters)} інверторів.', 'info')
+        elif action == 'test':
+            for inv in inverters:
+                online = check_modbus_connection(inv.ip_address)
+                flash(f'{inv.name}: TCP-з’єднання ' + ('доступне.' if online else 'недоступне.'), 'info')
+        else:
+            if app.config['MODBUS_WRITES_ENABLED'] is not True:
+                abort(403, 'Modbus-записи заблоковано.')
+            for inv in inverters:
+                if action == 'on':
+                    result = modbus_turn_on(inv.ip_address, allow_write=True)
+                elif action == 'off':
+                    result = modbus_turn_off(inv.ip_address, allow_write=True)
+                else:
+                    result = modbus_limit_power(inv.ip_address, value=value, allow_write=True)
+                flash(f'{inv.name}: {result.message}', 'info' if result.confirmed else 'danger')
+        return redirect(url_for('index'))
 
-        elif action == "off":
-            modbus_turn_off(inv.ip_address)
+    @app.cli.command('init-db')
+    def init_db():
+        """Explicit schema initialization; back up existing databases first."""
+        db.create_all()
+        click.echo('Схему створено. Наявні записи не змінено.')
 
-        elif action == "limit":
-            try:
-                value = int(request.form.get('limit_value', 50))
-                if not (1 <= value <= 100):
-                    raise ValueError("Недопустимий відсоток")
-            except Exception:
-                value = 50
-                flash("⚠️ Некоректне значення обмеження, використано 50%", "warning")
-
-            modbus_limit_power(inv.ip_address, value=value)
-            cmd, scaled = read_command_status(inv.ip_address)
-            if cmd is not None:
-                flash(f'📊 {inv.name} → CMD: {cmd}, Значення: {scaled}', 'info')
-
-        elif action == "limit_max":
-            modbus_limit_power(inv.ip_address, value=100)
-            flash(f'🔄 {inv.name} → Повернено до 100%', 'info')
-
-    flash(f"Команда \"{action}\" виконана для {len(inverters)} інверторів.", "success")
-    return redirect(url_for('index'))
-
-@app.route('/edit/<int:inverter_id>', methods=['GET', 'POST'])
-def edit_inverter(inverter_id):
-    inverter = Inverter.query.get_or_404(inverter_id)
-
-    if request.method == 'POST':
-        inverter.name = request.form['name']
-        inverter.group = request.form['group']
-        inverter.ip_address = request.form['ip']
-        inverter.login = request.form['login']
-        inverter.password = request.form['password']
+    @app.cli.command('create-user')
+    @click.argument('username')
+    @click.option('--role', type=click.Choice(ROLES), default='Viewer', show_default=True)
+    @click.password_option(confirmation_prompt=True)
+    def create_user(username, role, password):
+        username = username.strip().lower()
+        if not USERNAME.fullmatch(username):
+            raise click.ClickException('Ім’я: 1–64 символи a-z, 0-9, _, ., -.')
+        if db.session.scalar(db.select(User).where(User.username == username)):
+            raise click.ClickException('Користувач уже існує.')
+        user = User(username=username, role=role)
+        try:
+            user.set_password(password)
+        except ValueError as error:
+            raise click.ClickException(str(error)) from error
+        db.session.add(user)
         db.session.commit()
-        flash('Інвертор оновлено успішно.', 'success')
-        return redirect(url_for('index'))
+        click.echo('Користувача створено.')
 
-    groups = db.session.query(Inverter.group).distinct().all()
-    groups = [g[0] for g in groups]
-    return render_template('edit_inverter.html', inverter=inverter, groups=groups)
+    return app
 
-@app.route('/delete/<int:inverter_id>', methods=['POST'])
-def delete_inverter(inverter_id):
-    inverter = Inverter.query.get_or_404(inverter_id)
-    db.session.delete(inverter)
-    db.session.commit()
-    flash(f'Інвертор "{inverter.name}" видалено.', 'info')
-    return redirect(url_for('index'))
+
+app = create_app()
 
 if __name__ == '__main__':
-    if not os.path.exists('database.db'):
-        with app.app_context():
-            db.create_all()
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(host='127.0.0.1', port=5000, debug=False)

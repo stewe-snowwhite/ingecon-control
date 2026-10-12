@@ -1,101 +1,86 @@
-from pymodbus.client import ModbusTcpClient
-from pymodbus.exceptions import ModbusException
-import logging
+"""Legacy register operations with writes denied by default.
 
-# Налаштування логування
-logging.basicConfig(
-    filename='modbus.log',
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+Register maps are NOT validated for any model by these tests. A write reply and
+readback confirm register contents only, not physical inverter operation.
+"""
+import logging
+from dataclasses import dataclass
+
+from pymodbus.client import ModbusTcpClient
+
+log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    confirmed: bool
+    message: str
+
 
 def check_modbus_connection(ip_address, port=502, timeout=2):
+    client = None
     try:
         client = ModbusTcpClient(host=ip_address, port=port, timeout=timeout)
-        result = client.connect()
-        client.close()
-        return result
-    except ModbusException:
+        return bool(client.connect())
+    except Exception:
+        log.warning('Modbus connection failed')
         return False
-    except Exception as e:
-        logging.error(f"[Modbus] Помилка при з'єднанні з {ip_address}: {e}")
-        return False
+    finally:
+        if client is not None:
+            client.close()
 
-def modbus_turn_on(ip, port=502):
+
+def _write_and_verify(ip, address, value, port, allow_write):
+    if allow_write is not True:
+        return CommandResult(False, 'Modbus-записи заблоковано.')
+    client = None
     try:
-        client = ModbusTcpClient(ip, port=port)
-        if client.connect():
-            client.write_register(1000, 6, device_id=1)  # CMD6: Start inverter
-            logging.info(f"[Modbus] 🔌 Інвертор {ip} — запущено (CMD6)")
-        else:
-            logging.warning(f"[Modbus] ❌ Не вдалося підключитися до {ip} для запуску")
-        client.close()
-    except Exception as e:
-        logging.error(f"[Modbus] ❌ Помилка запуску інвертора {ip}: {e}")
+        # No automatic write retries: a lost reply leaves an unknown result.
+        client = ModbusTcpClient(host=ip, port=port, retries=0)
+        if not client.connect():
+            return CommandResult(False, 'Пристрій недоступний; запис не підтверджено.')
+        reply = client.write_register(address, value, device_id=1)
+        if reply is None or reply.isError():
+            return CommandResult(False, 'Пристрій не підтвердив запис.')
+        if getattr(reply, 'address', None) != address or getattr(reply, 'registers', None) != [value]:
+            return CommandResult(False, 'Відповідь запису не відповідає команді.')
+        readback = client.read_holding_registers(address, count=1, device_id=1)
+        if readback is None or readback.isError() or readback.registers != [value]:
+            return CommandResult(False, 'Значення регістра після запису не підтверджено.')
+        return CommandResult(True, 'Підтверджено запис регістра; фізичний стан інвертора не підтверджено.')
+    except Exception:
+        log.warning('Modbus command result unknown', exc_info=False)
+        return CommandResult(False, 'Результат запису невідомий; автоматичного повторення немає.')
+    finally:
+        if client is not None:
+            client.close()
 
-def modbus_turn_off(ip, port=502):
-    try:
-        client = ModbusTcpClient(ip, port=port)
-        if client.connect():
-            client.write_register(1000, 5, device_id=1)  # CMD5: Stop inverter
-            logging.info(f"[Modbus] ⛔ Інвертор {ip} — зупинено (CMD5)")
-        else:
-            logging.warning(f"[Modbus] ❌ Не вдалося підключитися до {ip} для зупинки")
-        client.close()
-    except Exception as e:
-        logging.error(f"[Modbus] ❌ Помилка зупинки інвертора {ip}: {e}")
 
-def modbus_limit_power(ip, value=50, port=502):
-    try:
-        client = ModbusTcpClient(ip, port=port)
-        if client.connect():
-            value = max(0, min(int(value), 100))
+def modbus_turn_on(ip, port=502, *, allow_write=False):
+    return _write_and_verify(ip, 1000, 6, port, allow_write)
 
-            # ⚙️ Запис у регістр 46
-            result = client.write_register(46, value, device_id=1)
-            if result.isError():
-                logging.warning(f"[Modbus] ⚠️ Не вдалося записати обмеження для {ip}")
-            else:
-                logging.info(f"[Modbus] ⚙️ Обмеження {ip} встановлено на {value}%")
 
-                # 📤 Зчитування регістра 46
-                rr = client.read_holding_registers(46, count=1, device_id=1)
-                if rr and not rr.isError() and hasattr(rr, 'registers') and len(rr.registers) > 0:
-                    actual = rr.registers[0]
-                    logging.info(f"[Modbus] 📤 Фактичне обмеження: {actual}%")
-                else:
-                    logging.warning(f"[Modbus] ⚠️ Не вдалося зчитати обмеження — пуста або помилкова відповідь")
+def modbus_turn_off(ip, port=502, *, allow_write=False):
+    return _write_and_verify(ip, 1000, 5, port, allow_write)
 
-                # 🧠 Зчитування причини
-                rr_reason = client.read_holding_registers(47, count=1, device_id=1)
-                if rr_reason and not rr_reason.isError() and hasattr(rr_reason, 'registers') and len(rr_reason.registers) > 0:
-                    reason = rr_reason.registers[0]
-                    if reason == 9:
-                        logging.info(f"[Modbus] ✅ Причина обмеження: Configuration (A) [код 9]")
-                    else:
-                        logging.warning(f"[Modbus] ⚠️ Інша причина: код {reason}")
-                else:
-                    logging.warning(f"[Modbus] ⚠️ Не вдалося зчитати причину обмеження")
-        else:
-            logging.warning(f"[Modbus] ❌ Не вдалося підключитися до {ip}")
-        client.close()
-    except Exception as e:
-        logging.error(f"[Modbus] ❌ Помилка обмеження потужності {ip}: {e}")
+
+def modbus_limit_power(ip, value=50, port=502, *, allow_write=False):
+    if type(value) is not int or not 1 <= value <= 100:
+        return CommandResult(False, 'Відсоток має бути цілим числом від 1 до 100.')
+    return _write_and_verify(ip, 46, value, port, allow_write)
+
 
 def read_command_status(ip, port=502):
+    client = None
     try:
-        client = ModbusTcpClient(ip, port=port)
+        client = ModbusTcpClient(host=ip, port=port)
         if client.connect():
-            result = client.read_holding_registers(1000, count=2, device_id=1)
+            reply = client.read_holding_registers(1000, count=2, device_id=1)
+            if reply is not None and not reply.isError() and len(reply.registers) == 2:
+                return tuple(reply.registers)
+    except Exception:
+        log.warning('Modbus status unavailable')
+    finally:
+        if client is not None:
             client.close()
-            if result and hasattr(result, 'registers') and len(result.registers) >= 2:
-                cmd = result.registers[0]
-                scaled = result.registers[1]
-                percent = round(scaled / 32767 * 100, 1)
-                logging.info(f"[Modbus] 📥 {ip} → Поточне обмеження: {percent}% (scaled={scaled})")
-                return cmd, scaled
-            else:
-                logging.warning(f"[Modbus] ⚠️ Неможливо зчитати статус команди — недостатньо регістрів")
-    except Exception as e:
-        logging.error(f"[Modbus] ❌ Виняток при читанні статусу з {ip}: {e}")
     return None, None

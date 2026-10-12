@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Вхід</title></head>
+<body><main><h1>Вхід до ingecon-control</h1>
+{% if error %}<p role="alert">{{ error }}</p>{% endif %}
+<form method="POST" action="{{ url_for('login') }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<label>Ім’я користувача <input name="username" required maxlength="64" autocomplete="username"></label>
+<label>Пароль <input name="password" type="password" required maxlength="1024" autocomplete="current-password"></label>
+<button type="submit">Увійти</button>
+</form></main></body></html>
