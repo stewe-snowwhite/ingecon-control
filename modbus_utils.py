@@ -1,4 +1,4 @@
-from pymodbus.client.sync import ModbusTcpClient
+from pymodbus.client import ModbusTcpClient
 from pymodbus.exceptions import ModbusException
 import logging
 
@@ -25,7 +25,7 @@ def modbus_turn_on(ip, port=502):
     try:
         client = ModbusTcpClient(ip, port=port)
         if client.connect():
-            client.write_register(1000, 6, slave=1)  # CMD6: Start inverter
+            client.write_register(1000, 6, device_id=1)  # CMD6: Start inverter
             logging.info(f"[Modbus] 🔌 Інвертор {ip} — запущено (CMD6)")
         else:
             logging.warning(f"[Modbus] ❌ Не вдалося підключитися до {ip} для запуску")
@@ -37,7 +37,7 @@ def modbus_turn_off(ip, port=502):
     try:
         client = ModbusTcpClient(ip, port=port)
         if client.connect():
-            client.write_register(1000, 5, slave=1)  # CMD5: Stop inverter
+            client.write_register(1000, 5, device_id=1)  # CMD5: Stop inverter
             logging.info(f"[Modbus] ⛔ Інвертор {ip} — зупинено (CMD5)")
         else:
             logging.warning(f"[Modbus] ❌ Не вдалося підключитися до {ip} для зупинки")
@@ -52,14 +52,14 @@ def modbus_limit_power(ip, value=50, port=502):
             value = max(0, min(int(value), 100))
 
             # ⚙️ Запис у регістр 46
-            result = client.write_register(46, value, slave=1)
+            result = client.write_register(46, value, device_id=1)
             if result.isError():
                 logging.warning(f"[Modbus] ⚠️ Не вдалося записати обмеження для {ip}")
             else:
                 logging.info(f"[Modbus] ⚙️ Обмеження {ip} встановлено на {value}%")
 
                 # 📤 Зчитування регістра 46
-                rr = client.read_holding_registers(46, 1, slave=1)
+                rr = client.read_holding_registers(46, count=1, device_id=1)
                 if rr and not rr.isError() and hasattr(rr, 'registers') and len(rr.registers) > 0:
                     actual = rr.registers[0]
                     logging.info(f"[Modbus] 📤 Фактичне обмеження: {actual}%")
@@ -67,7 +67,7 @@ def modbus_limit_power(ip, value=50, port=502):
                     logging.warning(f"[Modbus] ⚠️ Не вдалося зчитати обмеження — пуста або помилкова відповідь")
 
                 # 🧠 Зчитування причини
-                rr_reason = client.read_holding_registers(47, 1, slave=1)
+                rr_reason = client.read_holding_registers(47, count=1, device_id=1)
                 if rr_reason and not rr_reason.isError() and hasattr(rr_reason, 'registers') and len(rr_reason.registers) > 0:
                     reason = rr_reason.registers[0]
                     if reason == 9:
@@ -86,7 +86,7 @@ def read_command_status(ip, port=502):
     try:
         client = ModbusTcpClient(ip, port=port)
         if client.connect():
-            result = client.read_holding_registers(1000, 2, slave=1)
+            result = client.read_holding_registers(1000, count=2, device_id=1)
             client.close()
             if result and hasattr(result, 'registers') and len(result.registers) >= 2:
                 cmd = result.registers[0]
