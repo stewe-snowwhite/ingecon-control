@@ -16,8 +16,9 @@ from models import db, Inverter, ROLES, User, MonitorConfig, InverterStatus, Sta
 from dashboard import (ACTIONS, STATES, command_payload, dashboard_snapshot, date_filter,
                        filters, sign_confirmation, verify_confirmation)
 from monitoring import current_statuses, Target, explain_reason
-from modbus_utils import modbus_limit_power, modbus_turn_off, modbus_turn_on
+from commands import block_reason, execute_devices
 from security import authenticate, load_user, log_failure, reserve_login_attempt, roles_required
+from telegram_web import telegram_web
 
 csrf = CSRFProtect()
 ALL_ROLES = ROLES
@@ -53,6 +54,7 @@ def create_app(config=None):
     db.init_app(app)
     app.before_request(load_user)
     csrf.init_app(app)
+    app.register_blueprint(telegram_web)
     app.jinja_env.filters['monitor_reason'] = explain_reason
     app.jinja_env.filters['utc_time'] = lambda value: (
         datetime.fromtimestamp(value, timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
@@ -290,10 +292,9 @@ def create_app(config=None):
         return execute_control(action, inverters, value)
 
     def execute_control(action, inverters, value):
-        if app.config.get('DEMO_MODE') and action not in ('delete', 'test'):
-            abort(403, 'У деморежимі всі Modbus-записи заборонено.')
-        if action not in ('delete', 'test') and app.config['MODBUS_WRITES_ENABLED'] is not True:
-            abort(403, 'Modbus-записи заблоковано.')
+        reason = block_reason(writes_enabled=app.config['MODBUS_WRITES_ENABLED'], demo=app.config.get('DEMO_MODE'))
+        if action not in ('delete', 'test') and reason:
+            abort(403, reason)
         if action != 'test':
             payload = command_payload(g.user, action, value, inverters)
             tokens = request.form.getlist('confirmation_token')
@@ -321,15 +322,8 @@ def create_app(config=None):
                                     message='Перевірку заплановано на наступний цикл монітора.'))
             db.session.commit()
         else:
-            for inv in inverters:
-                if action == 'on':
-                    result = modbus_turn_on(inv.ip_address, allow_write=True)
-                elif action == 'off':
-                    result = modbus_turn_off(inv.ip_address, allow_write=True)
-                else:
-                    result = modbus_limit_power(inv.ip_address, value=value, allow_write=True)
-                results.append(dict(id=inv.id, name=inv.name,
-                    outcome='register_confirmed' if result.confirmed else 'unconfirmed', message=result.message))
+            results = execute_devices(g.user, action, inverters, value,
+                writes_enabled=app.config['MODBUS_WRITES_ENABLED'], demo=app.config.get('DEMO_MODE'))
         if wants_json():
             return jsonify(results=results)
         return render_template('results.html', results=results)

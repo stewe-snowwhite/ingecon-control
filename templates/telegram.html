@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+{% block title %}Telegram{% endblock %}
+{% block content %}
+<h1>Telegram</h1>
+<p>Приватний чат, статуси з SQLite та сповіщення. Усі команди керування заблоковані.</p>
+{% if link %}
+<p>Telegram ID: <strong>{{ link.telegram_id }}</strong>. Сповіщення: {{ 'увімкнено' if link.notifications else 'вимкнено' }}.</p>
+<p>Зміна пароля, вихід із вебпанелі або деактивація користувача відкликає доступ бота; для нової прив’язки спочатку відкличте поточну.</p>
+<form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" name="action" value="unlink" class="button danger">Відкликати прив’язку та коди</button></form>
+{% else %}
+<p>Код дійсний 5 хвилин і лише для однієї прив’язки. Передайте його власному боту командою <code>/start КОД</code>. Не публікуйте код і не надсилайте його стороннім ботам.</p>
+<form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" name="action" value="code">Створити код</button></form>
+<form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" name="action" value="unlink" class="button subtle">Анулювати невикористані коди</button></form>
+{% endif %}
+{% if code %}<div class="notice warning" role="status"><p>Введіть у приватному чаті свого бота:</p><pre id="pairing-code">/start {{ code }}</pre><p>Це одноразовий секрет. Після оновлення сторінки він не показуватиметься. Новий код анулює попередній.</p></div>{% endif %}
+{% endblock %}

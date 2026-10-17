@@ -1,4 +1,5 @@
 """Database models; existing inverter schema is preserved."""
+import time
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -96,3 +97,76 @@ class MonitorHeartbeat(db.Model):
     stopped = db.Column(db.Boolean, nullable=False, default=False)
     last_error = db.Column(db.String(128), nullable=True)
     cycle_duration_seconds = db.Column(db.Float, nullable=False, default=0)
+
+
+class TelegramLinkCode(db.Model):
+    user_id = db.Column(db.Integer, primary_key=True)
+    digest = db.Column(db.String(64), nullable=False, unique=True)
+    user_version = db.Column(db.Integer, nullable=False)
+    expires_at = db.Column(db.Float, nullable=False)
+
+
+class TelegramLink(db.Model):
+    telegram_id = db.Column(db.BigInteger, primary_key=True)
+    user_id = db.Column(db.Integer, nullable=False, unique=True)
+    user_version = db.Column(db.Integer, nullable=False)
+    linked_at = db.Column(db.Float, nullable=False)
+    notifications = db.Column(db.Boolean, nullable=False, default=False)
+    online = db.Column(db.Boolean, nullable=False, default=True)
+    offline = db.Column(db.Boolean, nullable=False, default=True)
+    degraded = db.Column(db.Boolean, nullable=False, default=True)
+    group_filter = db.Column(db.String(100), nullable=True)
+    last_event_id = db.Column(db.Integer, nullable=False, default=0)
+
+
+class TelegramCommand(db.Model):
+    id = db.Column(db.String(32), primary_key=True)
+    telegram_id = db.Column(db.BigInteger, nullable=False)
+    user_id = db.Column(db.Integer, nullable=False)
+    payload = db.Column(db.JSON, nullable=False)
+    group_name = db.Column(db.String(100), nullable=True)
+    expires_at = db.Column(db.Float, nullable=False, index=True)
+    state = db.Column(db.String(16), nullable=False, default='awaiting')
+
+
+class CommandAudit(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    request_id = db.Column(db.String(64), nullable=False, unique=True)
+    source = db.Column(db.String(16), nullable=False)
+    telegram_id = db.Column(db.BigInteger, nullable=True, index=True)
+    user_id = db.Column(db.Integer, nullable=True)
+    username = db.Column(db.String(64), nullable=True)
+    occurred_at = db.Column(db.Float, nullable=False, index=True)
+    action = db.Column(db.String(16), nullable=False)
+    targets = db.Column(db.JSON, nullable=False)
+    result = db.Column(db.String(32), nullable=False)
+    details = db.Column(db.JSON, nullable=False)
+
+
+class TelegramDelivery(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    event_id = db.Column(db.Integer, nullable=False)
+    telegram_id = db.Column(db.BigInteger, nullable=False)
+    state = db.Column(db.String(16), nullable=False, default='pending', index=True)
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    next_attempt_at = db.Column(db.Float, nullable=False, default=0)
+    sent_at = db.Column(db.Float, nullable=True)
+    message_id = db.Column(db.BigInteger, nullable=True)
+    error = db.Column(db.String(32), nullable=True)
+    created_at = db.Column(db.Float, nullable=False, default=time.time, index=True)
+    __table_args__ = (db.UniqueConstraint('event_id','telegram_id'),)
+
+
+class TelegramUpdate(db.Model):
+    key = db.Column(db.String(64), primary_key=True)
+    received_at = db.Column(db.Float, nullable=False, index=True)
+
+
+class TelegramRate(db.Model):
+    key = db.Column(db.String(64), primary_key=True)
+    attempts = db.Column(db.Integer, nullable=False)
+    expires_at = db.Column(db.Float, nullable=False, index=True)
+
+
+TELEGRAM_TABLES = [model.__table__ for model in (TelegramLinkCode, TelegramLink, TelegramCommand,
+                   CommandAudit, TelegramDelivery, TelegramUpdate, TelegramRate)]

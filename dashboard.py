@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from flask import abort, request
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
+from commands import command_payload
 
 STATES = ('Online', 'Offline', 'Degraded', 'Unknown')
 ACTIONS = {'on': 'Увімкнути', 'off': 'Вимкнути', 'limit': 'Обмежити потужність',
@@ -37,13 +38,6 @@ def date_filter(value, end=False):
         return (parsed + timedelta(days=1) if end else parsed).timestamp()
     except (ValueError, OverflowError):
         abort(400, 'Некоректна дата; потрібен формат YYYY-MM-DD.')
-
-
-def command_payload(user, action, value, inverters):
-    # Bind the preview to the account/session and the exact inventory snapshot.
-    return {'user': user.id, 'version': user.session_version, 'role': user.role,
-            'action': action, 'value': value,
-            'targets': [[inv.id, inv.name, inv.group, inv.ip_address] for inv in inverters]}
 
 
 def sign_confirmation(secret, payload):
