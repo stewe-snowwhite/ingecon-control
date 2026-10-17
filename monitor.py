@@ -123,6 +123,8 @@ class MonitorWorker:
 
     def _check_schema(self):
         existing = set(inspect(self.engine).get_table_names())
+        if 'demo_metadata' in existing:
+            raise RuntimeError('Demo database: real monitoring is forbidden.')
         required = {'inverter', 'monitor_config', 'inverter_status', 'state_event', 'monitor_heartbeat'}
         if not required <= existing:
             raise RuntimeError('Monitoring schema missing; back up the DB and initialize it explicitly.')

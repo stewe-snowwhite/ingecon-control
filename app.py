@@ -10,7 +10,7 @@ from flask import (Flask, abort, flash, g, redirect, render_template, request,
                    send_file, session, url_for, jsonify)
 from flask.helpers import get_debug_flag
 from flask_wtf.csrf import CSRFProtect
-from werkzeug.exceptions import HTTPException
+from werkzeug.exceptions import HTTPException, SecurityError
 
 from models import db, Inverter, ROLES, User, MonitorConfig, InverterStatus, StateEvent
 from dashboard import (ACTIONS, STATES, command_payload, dashboard_snapshot, date_filter,
@@ -83,6 +83,12 @@ def create_app(config=None):
 
     @app.errorhandler(HTTPException)
     def http_error(error):
+        if isinstance(error, SecurityError):
+            # An untrusted Host has no URL adapter; templates using url_for
+            # cannot render safely here. Do not reflect the supplied Host.
+            if wants_json():
+                return jsonify(error='Недозволений Host.'), 400
+            return 'Недозволений Host.', 400, {'Content-Type': 'text/plain; charset=utf-8'}
         messages = {400: 'Некоректний запит або недійсний CSRF. Оновіть сторінку й повторіть дію.',
                     403: 'Недостатньо прав або операцію заблоковано.', 404: 'Сторінку або запис не знайдено.',
                     405: 'Цей метод запиту не дозволений.', 500: 'Не вдалося обробити запит. Спробуйте пізніше.'}
@@ -284,6 +290,8 @@ def create_app(config=None):
         return execute_control(action, inverters, value)
 
     def execute_control(action, inverters, value):
+        if app.config.get('DEMO_MODE') and action not in ('delete', 'test'):
+            abort(403, 'У деморежимі всі Modbus-записи заборонено.')
         if action not in ('delete', 'test') and app.config['MODBUS_WRITES_ENABLED'] is not True:
             abort(403, 'Modbus-записи заблоковано.')
         if action != 'test':
@@ -380,7 +388,13 @@ def create_app(config=None):
     return app
 
 
-app = create_app()
+def __getattr__(name):
+    # Preserve app:app WSGI compatibility without opening/configuring the default
+    # application when a separate factory caller (demo/tests) imports create_app.
+    if name == 'app':
+        application = globals()['app'] = create_app()
+        return application
+    raise AttributeError(name)
 
 if __name__ == '__main__':
-    app.run(host='127.0.0.1', port=5000, debug=False)
+    create_app().run(host='127.0.0.1', port=5000, debug=False)
