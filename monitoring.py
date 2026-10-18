@@ -15,6 +15,7 @@ from sqlalchemy import select, update
 import modbus_utils
 from models import Inverter, InverterStatus, MonitorConfig, MonitorHeartbeat, StateEvent
 from operation_locks import OperationBusy, endpoint_key, resource_lock
+from input_registers import INPUT_BLOCKS
 
 
 @dataclass(frozen=True)
@@ -45,10 +46,12 @@ class Target:
             raise ValueError('invalid_count')
         if self.read_address is not None and not 0 <= self.read_address <= 65536-self.read_count:
             raise ValueError('invalid_register_range')
-        if self.profile not in ('generic', 'legacy_ingeteam'):
+        if self.profile not in ('generic', 'legacy_ingeteam', 'ingecon_100tl_input'):
             raise ValueError('invalid_profile')
         if self.profile == 'legacy_ingeteam' and (self.read_address, self.read_count) != (1000, 2):
             raise ValueError('legacy_profile_requires_1000_2')
+        if self.profile == 'ingecon_100tl_input' and (self.read_address, self.read_count) != INPUT_BLOCKS[0]:
+            raise ValueError('input_profile_requires_20_16')
 
 
 def target_for(inverter, config):
@@ -76,7 +79,7 @@ class Observation:
 
 
 class NetworkProbes:
-    """Independent, bounded probes; FC03 only. No Modbus write API is used."""
+    """Independent bounded FC03/FC04 probes. No Modbus write API is used."""
     def __init__(self, timeout=2, runner=None, clock=time.monotonic):
         if not math.isfinite(timeout) or not 0.1 <= timeout <= 10:
             raise ValueError('Probe timeout must be 0.1–10 seconds')
@@ -133,6 +136,16 @@ class NetworkProbes:
                                                          timeout=self.timeout, retries=0)
                     if not client.connect():
                         return ProbeResult(False, self.elapsed(start), 'modbus_unreachable')
+                    if target.profile == 'ingecon_100tl_input':
+                        values = []
+                        for address, count in INPUT_BLOCKS:
+                            reply = client.read_input_registers(address, count=count, device_id=target.device_id)
+                            registers = getattr(reply, 'registers', None)
+                            if reply is None or reply.isError() or not isinstance(registers, (list, tuple)) or len(registers) != count or any(
+                                type(value) is not int or not 0 <= value <= 65535 for value in registers):
+                                return ProbeResult(False, self.elapsed(start), 'modbus_invalid_response')
+                            values.extend(registers)
+                        return ProbeResult(True, self.elapsed(start), registers=tuple(values))
                     reply = client.read_holding_registers(target.read_address,
                                                          count=target.read_count, device_id=target.device_id)
                     if reply is None:
@@ -215,6 +228,10 @@ def apply_observation(session, inverter, observation, stale_after):
         if name != 'modbus':
             setattr(status, name+'_latency_ms', result.latency_ms)
     status.power_limit_percent = None
+    if target.profile == 'ingecon_100tl_input' and observation.modbus.ok:
+        values = observation.modbus.registers
+        if len(values) == 19 and 0 <= values[16] <= 100:
+            status.power_limit_percent = values[16]
     if target.profile == 'legacy_ingeteam' and observation.modbus.ok:
         cmd, limit = observation.modbus.registers
         if cmd == 16 and 0 <= limit <= 32767:

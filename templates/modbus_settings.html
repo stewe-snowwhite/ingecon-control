@@ -1,0 +1,16 @@
+{% extends 'settings_base.html' %}{% block title %}Налаштування · Modbus{% endblock %}
+{% block settings_content %}
+<section class="surface"><h2>Глобальна конфігурація Modbus · INGECON SUN 100TL</h2>
+<p class="notice warning">Історичні Holding-команди непідтверджені. Фізичний запис заблоковано на backend незалежно від форми, Telegram або змінних середовища.</p>
+<p>Одна конфігурація для всіх інверторів. Адреси — нульові адреси протоколу, без автоматичного зсуву. Межі ліміту незмінні: 1–100 %.</p>
+<form method="POST" class="stacked-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<input type="hidden" name="config_fingerprint" value="{{ config_fingerprint }}">
+{% for name in fields %}<label>{{ labels[name] }}<input type="number" name="{{ name }}" value="{{ config_values[name] }}" required min="{{ 1 if name in ('port','device_id','timeout') else 0 }}" max="{{ 247 if name == 'device_id' else 10 if name == 'timeout' else 65535 }}" step="1"></label>{% endfor %}
+<div class="button-row"><button class="button primary" type="submit">Зберегти конфігурацію</button></div></form>
+<div class="button-row"><a class="button" href="{{ url_for('modbus_web.control') }}">Увімкнення, вимкнення й ліміт</a><a class="button" href="{{ url_for('modbus_web.registers') }}">Панель тестування регістрів</a></div></section>
+<section class="surface"><h2>Окрема карта Input Registers · FC04</h2><p>{{ document }}</p>
+<p>Довідкова карта виробника. Сумісність фактичної моделі та прошивки перевіряється окремо. Вона не підтверджує історичні Holding-команди.</p>
+<p><a href="{{ source }}" rel="noreferrer">Копія документа виробника</a></p>
+<div class="table-wrap"><table><thead><tr><th>Адреса FC04</th><th>Modicon</th><th>Параметр</th><th>Тип</th><th>Множник</th><th>Одиниця</th></tr></thead><tbody>
+{% for row in input_registers %}<tr><td data-label="Адреса">{{ row.address }}</td><td data-label="Modicon">{{ 30001+row.address }}</td><td data-label="Параметр">{{ row.name }}</td><td data-label="Тип">{{ 'INT16' if row.signed else 'UINT16' }}</td><td data-label="Множник">{{ row.multiplier }}</td><td data-label="Одиниця">{{ row.unit }}</td></tr>{% endfor %}
+</tbody></table></div></section>{% endblock %}

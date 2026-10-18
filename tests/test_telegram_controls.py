@@ -25,6 +25,11 @@ def configuration(ids=(1, 2)):
 
 
 def enable(tg, ids=(1, 2)):
+    from dataclasses import replace
+    from modbus_config import load_configuration, save_configuration
+    current = load_configuration()
+    save_configuration(replace(current, port=1502, device_id=7, start_address=2000, start_value=42,
+        stop_address=2001, stop_value=43), current.fingerprint)
     tg.store.control_policy = policy_from_dict(configuration(ids))
     tg.link()
 
@@ -40,7 +45,7 @@ def test_confirmed_commands_use_explicit_map_and_do_not_repeat(tg, modbus, actio
     result, details = tg.store.confirm(1001, intent)
     assert result == 'confirmed' and len(details) == 2
     assert all(row['outcome'] == 'register_confirmed' for row in details)
-    assert details[0]['command'] == dict(model='mock-test-model', port=1502, device_id=7, address=address, value=value)
+    assert details[0]['command'] == dict(model='INGECON SUN 100TL (historical, unconfirmed)', port=1502, device_id=7, address=address, value=value)
     assert len(modbus[1]) == 2
     for client in modbus[1]:
         assert (client.port, client.retries) == (1502, 0)

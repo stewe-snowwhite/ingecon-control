@@ -19,6 +19,7 @@
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 {% if g.user.role != 'Viewer' %}<div class="action-bar" id="actions"><span id="selection-count">Обрано: 0</span>
 <button class="button" type="submit" name="action" value="test">Перевірити підключення</button>
+{% if config.get('MODBUS_TOOLS_AVAILABLE', False) %}<a class="button" href="{{ url_for('modbus_web.control') }}">Керування Modbus · попередній перегляд</a>{% endif %}
 <button class="button" type="submit" name="action" value="on" {% if not config.MODBUS_WRITES_ENABLED %}disabled{% endif %}>Увімкнути</button>
 <button class="button" type="submit" name="action" value="off" {% if not config.MODBUS_WRITES_ENABLED %}disabled{% endif %}>Вимкнути</button>
 <label class="compact-label">Ліміт, %<input type="number" name="limit_value" min="1" max="100" step="1" value="50" {% if not config.MODBUS_WRITES_ENABLED %}disabled{% endif %}></label>

@@ -20,6 +20,7 @@ from commands import block_reason, execute_devices
 from security import USERNAME, authenticate, load_user, log_failure, reserve_login_attempt, roles_required
 from telegram_web import telegram_web
 from users_web import users_web
+from modbus_web import modbus_web
 from configuration import cookie_secure_from_env, secret_from_env
 
 csrf = CSRFProtect()
@@ -41,6 +42,7 @@ def create_app(config=None):
         SESSION_REFRESH_EACH_REQUEST=False,
         MAX_CONTENT_LENGTH=64 * 1024,
         MODBUS_WRITES_ENABLED=False,
+        REGISTER_READS_ENABLED=os.environ.get('INGECON_REGISTER_READS_ENABLED', 'false').lower() == 'true',
         MONITOR_STALE_AFTER_SECONDS=None,
         LOGIN_IP_LIMIT=20,
         LOGIN_ACCOUNT_LIMIT=5,
@@ -51,6 +53,8 @@ def create_app(config=None):
         app.config.update(config)
     if type(app.config['SESSION_COOKIE_SECURE']) is not bool:
         raise RuntimeError('SESSION_COOKIE_SECURE must be a boolean.')
+    if type(app.config['REGISTER_READS_ENABLED']) is not bool or os.environ.get('INGECON_REGISTER_READS_ENABLED', 'false').lower() not in ('true', 'false'):
+        raise RuntimeError('INGECON_REGISTER_READS_ENABLED must explicitly be true or false.')
     if not isinstance(app.config['SECRET_KEY'], str) or len(app.config['SECRET_KEY']) < 32:
         raise RuntimeError('Set INGECON_SECRET_KEY to a random secret of at least 32 characters.')
     if app.debug or get_debug_flag():
@@ -60,6 +64,8 @@ def create_app(config=None):
     csrf.init_app(app)
     app.register_blueprint(telegram_web)
     app.register_blueprint(users_web)
+    app.register_blueprint(modbus_web)
+    app.config['MODBUS_TOOLS_AVAILABLE'] = True
     # Keep existing form/bookmark URLs protected by the same handlers.
     app.register_blueprint(telegram_web, url_prefix='/telegram', name='legacy_telegram')
     app.register_blueprint(users_web, url_prefix='/users', name='legacy_users')
@@ -355,7 +361,7 @@ def create_app(config=None):
     @click.option('--device-id', type=click.IntRange(1, 255), default=1)
     @click.option('--read-address', type=click.IntRange(0, 65535), required=True)
     @click.option('--read-count', type=click.IntRange(1, 125), default=1)
-    @click.option('--profile', type=click.Choice(['generic', 'legacy_ingeteam']), default='generic')
+    @click.option('--profile', type=click.Choice(['generic', 'legacy_ingeteam', 'ingecon_100tl_input']), default='generic')
     def configure_monitor(inverter_id, port, device_id, read_address, read_count, profile):
         """Configure a documented read register for this specific inverter; no network."""
         inverter = db.session.get(Inverter, inverter_id)

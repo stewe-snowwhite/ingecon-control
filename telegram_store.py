@@ -14,6 +14,8 @@ from models import (User, Inverter, StateEvent, TelegramLinkCode, TelegramLink,
                     TelegramCommand, CommandAudit, TelegramDelivery, TelegramUpdate, TelegramRate)
 from monitoring import current_statuses
 from telegram_control import TelegramControlPolicy
+from modbus_config import load_configuration
+import modbus_safety
 
 CODE = re.compile(r'[A-Za-z0-9_-]{32}', re.ASCII)
 NOTIFY_STATES = {'Online':'online', 'Offline':'offline', 'Degraded':'degraded'}
@@ -51,11 +53,12 @@ class TelegramStore:
 
     @property
     def controls_enabled(self):
-        return self.control_policy.enabled
+        return self.control_policy.enabled and not modbus_safety.writes_locked()
 
     def control_payload(self, user, action, inverters):
         payload = command_payload(user, action, 100, inverters)
         payload['control_policy'] = self.control_policy.fingerprint
+        payload['modbus_config'] = load_configuration().fingerprint
         return payload
 
     def user(self, session, telegram_id):

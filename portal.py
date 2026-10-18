@@ -59,5 +59,8 @@ def create_portal_app():
     def loopback_proxy(environ, start_response):
         return (fixed if environ.get('REMOTE_ADDR') == '127.0.0.1' else original)(environ, start_response)
     application.wsgi_app = loopback_proxy
-    disable_device_transports()
+    if application.config['REGISTER_READS_ENABLED']:
+        disable_device_transports(allow_register_reads=True)
+    else:
+        disable_device_transports()
     return application

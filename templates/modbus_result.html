@@ -1,0 +1,5 @@
+{% extends 'base.html' %}{% block title %}Результат Modbus{% endblock %}
+{% block content %}<section class="surface narrow"><h1>Результат запиту</h1><p>#{{ target.id }} {{ target.name }} · {{ target.ip_address }}</p>
+<p class="notice {{ 'info' if result.outcome == 'read' else 'warning' }}" role="status">{{ result.message }}</p>
+{% if result.registers %}<div class="table-wrap"><table><thead><tr><th>Адреса</th><th>Значення UINT16</th></tr></thead><tbody>{% for value in result.registers %}<tr><td data-label="Адреса">{{ operation.address+loop.index0 }}</td><td data-label="Значення">{{ value }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
+<p><a href="{{ url_for('index') }}">До огляду</a>{% if g.user.role == 'Administrator' %} · <a href="{{ url_for('modbus_web.settings') }}">Налаштування Modbus</a>{% endif %}</p></section>{% endblock %}

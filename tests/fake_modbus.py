@@ -18,6 +18,8 @@ class FakeModbusTcpClient:
         self.closed = False
         self.calls = []
         self.registers = {46: 50, 47: 9, 1000: 16, 1001: 32767}
+        self.input_registers = {address: 0 for address in (*range(20, 36), 52, 53, 54)}
+        self.input_registers[52] = 75
         self.read_error = False
         self.write_error = False
 
@@ -38,3 +40,7 @@ class FakeModbusTcpClient:
         self.calls.append(('read', address, count, device_id))
         return Response([self.registers.get(address+i, 0) for i in range(count)],
                         error=self.read_error)
+
+    def read_input_registers(self, address, *, count=1, device_id=1):
+        self.calls.append(('read_input', address, count, device_id))
+        return Response([self.input_registers.get(address+i, 0) for i in range(count)], error=self.read_error)

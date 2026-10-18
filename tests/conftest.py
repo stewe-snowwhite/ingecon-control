@@ -26,6 +26,8 @@ def isolation(monkeypatch, tmp_path):
     monkeypatch.delenv('INGECON_SECRET_KEY_FILE', raising=False)
     monkeypatch.delenv('INGECON_COOKIE_SECURE', raising=False)
     monkeypatch.delenv('INGECON_TELEGRAM_CONTROL_CONFIG', raising=False)
+    monkeypatch.setenv('INGECON_MODBUS_CONFIG_FILE', str(tmp_path/'modbus.json'))
+    monkeypatch.delenv('INGECON_REGISTER_READS_ENABLED', raising=False)
     monkeypatch.chdir(tmp_path)
     import pymodbus.client
     monkeypatch.setattr(pymodbus.client, 'ModbusTcpClient', FakeModbusTcpClient)
@@ -35,6 +37,9 @@ def isolation(monkeypatch, tmp_path):
 @pytest.fixture
 def modbus(isolation, monkeypatch):
     import modbus_utils
+    import modbus_safety
+    # Only this fixture permits writes, and only against the in-memory mock.
+    monkeypatch.setattr(modbus_safety, 'PHYSICAL_WRITES_LOCKED', False)
     clients = []
     def factory(host, **kwargs):
         client = FakeModbusTcpClient(host, **kwargs)

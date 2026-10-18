@@ -1,5 +1,7 @@
 """Shared role/validation boundary; writes require an explicit source policy."""
-from modbus_utils import modbus_control, modbus_limit_power, modbus_turn_off, modbus_turn_on
+from modbus_utils import modbus_control
+from modbus_config import load_configuration
+import modbus_safety
 
 
 class ControlBlocked(ValueError):
@@ -13,6 +15,8 @@ def block_reason(*, writes_enabled=False, source='web', telegram_policy=None):
         return 'Керування через Telegram заблоковано до окремого дозволу. Modbus-запис не виконувався.'
     if writes_enabled is not True:
         return 'Modbus-записи заблоковано.'
+    if modbus_safety.writes_locked():
+        return modbus_safety.WRITE_LOCK_REASON
     return None
 
 
@@ -39,23 +43,15 @@ def execute_devices(user, action, inverters, value=100, *, writes_enabled=False,
         except ValueError as error:
             raise ControlBlocked(str(error)) from error
     results = []
-    for index, inv in enumerate(inverters):
-        if profiles is not None:
-            profile = profiles[index]
-            result = modbus_control(inv.ip_address, port=profile.port, device_id=profile.device_id,
-                address=profile.start_address if action == 'on' else profile.stop_address,
-                value=profile.start_value if action == 'on' else profile.stop_value, allow_write=True)
-        elif action == 'on':
-            result = modbus_turn_on(inv.ip_address, allow_write=True)
-        elif action == 'off':
-            result = modbus_turn_off(inv.ip_address, allow_write=True)
-        else:
-            result = modbus_limit_power(inv.ip_address, value=value, allow_write=True)
+    config = load_configuration()
+    address, register_value = config.command(action, value)
+    for inv in inverters:
+        result = modbus_control(inv.ip_address, port=config.port, device_id=config.device_id,
+            address=address, value=register_value, allow_write=True, timeout=config.timeout)
         row = dict(id=inv.id, name=inv.name,
             outcome='register_confirmed' if result.confirmed else 'unconfirmed', message=result.message)
         if profiles is not None:
-            row['command'] = dict(model=profile.model, port=profile.port, device_id=profile.device_id,
-                address=profile.start_address if action == 'on' else profile.stop_address,
-                value=profile.start_value if action == 'on' else profile.stop_value)
+            row['command'] = dict(model='INGECON SUN 100TL (historical, unconfirmed)',
+                port=config.port, device_id=config.device_id, address=address, value=register_value)
         results.append(row)
     return results

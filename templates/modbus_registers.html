@@ -1,0 +1,15 @@
+{% extends 'settings_base.html' %}{% block title %}Modbus · Тестування регістрів{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='modbus.js') }}" defer></script>{% endblock %}
+{% block settings_content %}<section class="surface narrow"><h2>Тестування регістрів</h2>
+<p class="notice warning">FC06/FC16 проходять лише перевірку й підтвердження — записів не виконують. FC03/FC04 потребують окремо дозволеного на сервері читання. Автоматичних мережевих перевірок немає.</p>
+{% if targets %}<form method="POST" class="stacked-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<label>Зареєстрований інвертор<select name="inverter_id" id="register-inverter" required>{% for row in targets %}<option value="{{ row.id }}" data-ip="{{ row.ip_address }}">{{ row.name }} · {{ row.ip_address }}</option>{% endfor %}</select></label>
+<label>IP вибраного інвертора<input name="ip" id="register-ip" value="{{ targets[0].ip_address }}" maxlength="45" required></label>
+<label>TCP-порт<input type="number" name="port" min="1" max="65535" step="1" value="{{ modbus_config.port }}" required></label>
+<label>Unit ID<input type="number" name="device_id" min="1" max="247" step="1" value="{{ modbus_config.device_id }}" required></label>
+<label>Функція Modbus<select name="function" required>{% for value, label in functions.items() %}<option value="{{ value }}">{{ label }}</option>{% endfor %}</select></label>
+<label>Нульова адреса регістра<input type="number" name="address" min="0" max="65535" step="1" value="20" required></label>
+<label>Кількість регістрів<input type="number" name="count" min="1" max="125" step="1" value="1" required></label>
+<label>Значення для запису (0–65535, через кому)<input name="values" value="" maxlength="738" autocomplete="off"></label>
+<p class="muted">Для FC03/FC04 залиште значення порожнім. Для FC06 потрібне одне значення, для FC16 — до 123. IP має збігатися з вибраним записом.</p>
+<button class="button primary" type="submit">Перевірити й підготувати підтвердження</button></form>{% else %}<p class="empty-state">Спочатку зареєструйте інвертор.</p>{% endif %}</section>{% endblock %}

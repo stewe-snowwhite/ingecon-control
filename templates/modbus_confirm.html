@@ -1,0 +1,10 @@
+{% extends 'base.html' %}{% block title %}Підтвердження Modbus{% endblock %}
+{% block content %}<section class="surface narrow"><h1>Підтвердження запиту Modbus</h1>
+<p class="notice warning">Історичні команди непідтверджені. Фізичний запис заблоковано на backend. Підтвердження не обходить це блокування.</p>
+<p><strong>#{{ target.id }} {{ target.name }}</strong> · {{ target.ip_address }} · TCP {{ operation.port }} · Unit ID {{ operation.device_id }}</p>
+<p>FC{{ '%02d' | format(operation.function) }}, адреса {{ operation.address }}, {{ operation.count if operation.count is defined else 1 }} регістрів.</p>
+<p>Значення: {{ operation['values'] | join(', ') if operation['values'] else 'читання' }}</p>
+<p class="muted">Одноразове підтвердження, 120 секунд. Зміна конфігурації чи адреси анулює його.</p>
+<form method="POST" action="{{ action_url }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="confirmation_token" value="{{ confirmation_token }}">
+{% for name, value in submitted if name not in ('csrf_token', 'confirmation_token') %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+<div class="button-row"><a class="button" href="{{ action_url }}">Скасувати</a><button class="button primary" type="submit">Підтвердити запит</button></div></form></section>{% endblock %}

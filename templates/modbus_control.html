@@ -1,0 +1,11 @@
+{% extends 'base.html' %}{% block title %}Керування Modbus{% endblock %}
+{% block content %}<section class="surface narrow"><h1>Керування INGECON SUN 100TL</h1>
+<p class="notice warning">Історичні команди непідтверджені. Можна перевірити параметри та підтвердження дії; фізичний Modbus-запис заблоковано.</p>
+{% if targets %}<form method="POST" class="stacked-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<label>Зареєстрований інвертор<select name="inverter_id" required>{% for row in targets %}<option value="{{ row.id }}">{{ row.name }} · {{ row.ip_address }}</option>{% endfor %}</select></label>
+<p>Спільні параметри: TCP {{ modbus_config.port }}, Unit ID {{ modbus_config.device_id }}.</p>
+<label>Обмеження потужності, %<input type="number" name="value" value="50" min="1" max="100" step="1" required></label>
+<div class="button-row"><button class="button" type="submit" name="action" value="on">Увімкнути</button><button class="button" type="submit" name="action" value="off">Вимкнути</button>
+<button class="button" type="submit" name="action" value="limit">Застосувати ліміт</button><button class="button" type="submit" name="action" value="limit_max">Максимум · 100 %</button></div></form>
+{% else %}<p class="empty-state">Немає зареєстрованих інверторів.</p>{% endif %}
+<p><a href="{{ url_for('index') }}">До огляду</a>{% if g.user.role == 'Administrator' %} · <a href="{{ url_for('modbus_web.settings') }}">Спільна конфігурація</a>{% endif %}</p></section>{% endblock %}
