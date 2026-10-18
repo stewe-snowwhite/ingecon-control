@@ -2,6 +2,7 @@
 import hashlib
 import ipaddress
 import logging
+import re
 import secrets
 import time
 from functools import wraps
@@ -14,6 +15,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from models import db, LoginThrottle, User
 
 security_log = logging.getLogger('ingecon.auth')
+USERNAME = re.compile(r'[a-z0-9_.-]{1,64}', re.ASCII)
 # Used for non-existent/inactive accounts to avoid skipping password hashing.
 DUMMY_HASH = generate_password_hash(secrets.token_urlsafe(32), method='scrypt')
 

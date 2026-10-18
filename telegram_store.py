@@ -91,18 +91,23 @@ class TelegramStore:
 
     def unlink(self, user_id):
         with self.sessions.begin() as session:
-            session.execute(delete(TelegramLinkCode).where(TelegramLinkCode.user_id==user_id))
-            ids = select(TelegramLink.telegram_id).where(TelegramLink.user_id==user_id)
-            session.execute(update(TelegramDelivery).where(TelegramDelivery.telegram_id.in_(ids),
-                TelegramDelivery.state=='pending').values(state='skipped',error='unlinked'))
-            pending = select(TelegramCommand.id).where(TelegramCommand.user_id==user_id,
-                                                       TelegramCommand.state=='awaiting')
-            session.execute(update(CommandAudit).where(CommandAudit.request_id.in_(
-                select('tg:'+TelegramCommand.id).where(TelegramCommand.id.in_(pending))))
-                .values(result='cancelled'))
-            session.execute(update(TelegramCommand).where(TelegramCommand.user_id==user_id,
-                TelegramCommand.state=='awaiting').values(state='cancelled'))
-            session.execute(delete(TelegramLink).where(TelegramLink.user_id==user_id))
+            self.revoke_user(session, user_id)
+
+    @staticmethod
+    def revoke_user(session, user_id):
+        """Revoke access inside the caller's transaction, preserving audit/history."""
+        session.execute(delete(TelegramLinkCode).where(TelegramLinkCode.user_id==user_id))
+        ids = select(TelegramLink.telegram_id).where(TelegramLink.user_id==user_id)
+        session.execute(update(TelegramDelivery).where(TelegramDelivery.telegram_id.in_(ids),
+            TelegramDelivery.state=='pending').values(state='skipped',error='unlinked'))
+        pending = select(TelegramCommand.id).where(TelegramCommand.user_id==user_id,
+                                                   TelegramCommand.state=='awaiting')
+        session.execute(update(CommandAudit).where(CommandAudit.request_id.in_(
+            select('tg:'+TelegramCommand.id).where(TelegramCommand.id.in_(pending))))
+            .values(result='cancelled'))
+        session.execute(update(TelegramCommand).where(TelegramCommand.user_id==user_id,
+            TelegramCommand.state=='awaiting').values(state='cancelled'))
+        session.execute(delete(TelegramLink).where(TelegramLink.user_id==user_id))
 
     def web_link(self, user_id):
         with self.sessions() as session:

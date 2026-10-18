@@ -1,5 +1,6 @@
 """Database models; existing inverter schema is preserved."""
 import time
+import secrets
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -29,7 +30,10 @@ class User(db.Model):
         if not isinstance(password, str) or not 12 <= len(password) <= 1024:
             raise ValueError('Пароль має містити від 12 до 1024 символів.')
         self.password_hash = generate_password_hash(password, method='scrypt')
-        self.session_version = (self.session_version or 0) + 1
+        # SQLite may reuse a deleted account's integer ID. A fresh generation
+        # prevents its old signed cookies from authenticating as the new user.
+        self.session_version = (self.session_version + 1 if self.session_version is not None
+                                else secrets.randbits(62) + 1)
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)

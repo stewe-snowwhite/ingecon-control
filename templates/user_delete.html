@@ -1,0 +1,11 @@
+{% extends 'base.html' %}{% block title %}Видалити користувача{% endblock %}
+{% block content %}<section class="surface narrow"><h1>Видалити користувача</h1>
+<p>Обліковий запис: <strong>{{ target.username }}</strong> · {{ target.role }}</p>
+<p class="notice warning">Обліковий запис буде видалено. Його сесії, Telegram-прив’язку, одноразові коди й очікувані команди буде відкликано. Історія подій та аудит залишаться. Дію неможливо скасувати.</p>
+<form method="POST" class="stacked-form">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<input type="hidden" name="confirmation_token" value="{{ confirmation_token }}">
+<label>Для підтвердження введіть ім’я {{ target.username }}<input name="username_confirmation" required maxlength="64" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+<p class="muted">Підтвердження дійсне 2 хвилини.</p>
+<div class="button-row"><a class="button" href="{{ url_for('users_web.index') }}">Скасувати</a><button type="submit" class="button danger-outline">Підтвердити видалення</button></div>
+</form></section>{% endblock %}

@@ -17,14 +17,14 @@ from dashboard import (ACTIONS, STATES, command_payload, dashboard_snapshot, dat
                        filters, sign_confirmation, verify_confirmation)
 from monitoring import current_statuses, Target, explain_reason
 from commands import block_reason, execute_devices
-from security import authenticate, load_user, log_failure, reserve_login_attempt, roles_required
+from security import USERNAME, authenticate, load_user, log_failure, reserve_login_attempt, roles_required
 from telegram_web import telegram_web
+from users_web import users_web
 from configuration import cookie_secure_from_env, secret_from_env
 
 csrf = CSRFProtect()
 ALL_ROLES = ROLES
 CONTROL_ROLES = ('Administrator', 'Operator')
-USERNAME = re.compile(r'[a-z0-9_.-]{1,64}', re.ASCII)
 
 
 def create_app(config=None):
@@ -59,6 +59,9 @@ def create_app(config=None):
     app.before_request(load_user)
     csrf.init_app(app)
     app.register_blueprint(telegram_web)
+    app.register_blueprint(users_web)
+    # Shared templates remain safe until existing workers load the new routes.
+    app.config['USER_MANAGEMENT_AVAILABLE'] = True
     app.jinja_env.filters['monitor_reason'] = explain_reason
     app.jinja_env.filters['utc_time'] = lambda value: (
         datetime.fromtimestamp(value, timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
