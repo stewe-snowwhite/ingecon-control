@@ -1,98 +1,176 @@
-# Внутрішній HTTP-портал: план переходу й конфігурація
+# TASK-07 — внутрішній HTTP-портал із динамічною LAN та Tailscale
 
-## Стан підготовки
+## Фактичний стан і межі виконання
 
-Файли в `deploy/` **підготовлені, але ще не застосовані до системи**.
-Мережеві правила, `/etc/nginx`, systemd і працюючі процеси не змінювались.
-Для активації потрібні підтвердження власника та root-доступ. На момент перевірки
-`sudo -n` вимагає пароль; не передавайте його в чат або аргументах команд.
+Власник підтвердив активацію TASK-07. Конфігурацію перероблено для зміни
+локальної адреси, підмережі й мережі провайдера, включно зі Starlink.
+Фіксовані LAN-адреси та підмережі в активних конфігураціях відсутні.
 
-Перевірений поточний стан, 18 жовтня 2026:
+**Системна активація ще не виконана:** поточний користувач `codex` не має
+безпарольного sudo, `sudo -n -l` повертає `a password is required`.
+Правила nftables, `/etc/nginx`, systemd, SSH, Tailscale та процеси не змінено.
+Пароль не потрібно передавати в чат. Нижче є точна команда для root shell.
 
-- `enp1s0`: `192.168.10.234/24`, локальна підмережа `192.168.10.0/24`;
-- Nginx 1.26.3, активний і enabled, поки зі стандартним Debian-сайтом;
-- Nginx поки слухає `0.0.0.0:80` та `[::]:80`; LAN-обмеження ще не активовані;
-- SSH слухає порт 22; його конфігурація й правила не змінюються;
-- на порту 5000 слухача не було; demo не зупинялось і не змінювалось;
-- на первинній перевірці Telegram polling мав PID **1397**, користувач Linux
-  `codex` (UID 1001); на фінальній повторній перевірці цей PID уже відсутній і
-  polling-процесів не знайдено. Наші команди його не зупиняли;
-- бот використовує `/opt/ingecon-control/instance/production/ingecon.sqlite`
-  та наявний `/opt/ingecon-control/instance/telegram/bot.key`;
-- production-БД має повну схему з 14 таблиць і наявного користувача `stewe`;
-- Gunicorn 26.2.0 додано лише у проєктне `.venv`; системні пакети не встановлювались.
+Перевірено 18 жовтня 2026 року:
 
-PID, адреси й стан служб треба перевірити повторно безпосередньо перед переходом.
-Не зупиняти процес лише за старим PID, не перевіривши його команду, користувача
-та шлях БД. Не запускати ще один polling для перевірки.
+- `tailscale0` активний, поточна IPv4-адреса `100.84.37.60`; є також IPv6;
+- LAN має фізичний Ethernet-інтерфейс, приватну IPv4-адресу та відповідний
+  безпосередній DHCP-маршрут `scope link`; read-only автоматичне визначення успішне;
+- Nginx активний і enabled, поки обслуговує стандартний Debian-сайт на порту 80;
+- Tailscale активний і enabled; його налаштування не редагуються;
+- SSH слухає порт 22; на 5000 слухача немає;
+- служб `ingecon-web` і `ingecon-telegram` ще немає в активному стані;
+- ручних Telegram polling-процесів під час перевірки не знайдено;
+- production SQLite, існуючі ключ і токен збережено, міграцій немає.
 
-## Резервна копія та збереження даних
+Це знімок стану, а не гарантія для майбутнього запуску. Сценарій активації
+повторно перевіряє процеси, порти й наявні Nginx-сайти. Він не завершує невідомі
+процеси й не запускає другий polling поверх виявленого ручного бота.
 
-До змін коду створено й перевірено SQLite backup:
-
-```text
-/opt/ingecon-control/instance/production/backups/pre-http-portal-20261018T073541.482130Z.sqlite
-```
-
-Підготовка приватної конфігурації створила також свіжішу перевірену копію:
+## Схема
 
 ```text
-/opt/ingecon-control/instance/production/backups/pre-http-portal-20261018T074423.148388Z.sqlite
+Клієнт поточної перевіреної LAN ─┐
+Клієнт наявного Tailscale ──────┼─ nftables: TCP 80 ─ Nginx :80
+Loopback ──────────────────────┘                        │
+                                        Gunicorn 127.0.0.1:5000
+                                                       │
+                      /opt/ingecon-control/instance/production/ingecon.sqlite
+                                                       │
+                                       Telegram long polling, один процес
 ```
 
-Використано SQLite backup API з read-only джерелом; копія включає committed WAL.
-`PRAGMA quick_check` успішний. Файли 0600, каталог 0700; вміст копій секретний.
-Таблиці, записи, пароль/роль/session_version `stewe` не редагуються, міграцій немає.
-Чинний бот продовжує власну штатну роботу; копія є узгодженим знімком на момент backup.
+Gunicorn має тільки `127.0.0.1:5000`. Nginx має `listen 80` і `listen [::]:80`,
+`server_name monitoring.local`, upstream `http://127.0.0.1:5000`.
+Сертифікати, HTTPS listener, новий VPN, публічний webhook і port forwarding не
+створюються. Telegram використовує власний вихідний HTTPS до Telegram API.
 
-Для повторної підготовки **без зупинки процесів і системних змін**:
+`monitoring.local` потрібно вирішувати в поточну адресу сервера засобами
+локального DNS/mDNS/клієнтських hosts. `server_name` сам цього не налаштовує.
+DNS, Avahi, роутер і клієнтські hosts тут не змінюються. При зміні мережі DNS
+може потребувати окремого оновлення; прямий доступ за поточною IP працює без
+зміни конфігурації застосунку. Поточний VPN URL: **http://100.84.37.60/**.
+Ця адреса є прикладом фактичного доступу, а не значенням firewall або bind.
+
+## Як визначається LAN
+
+Привілейований процес `ingecon-http-guard` раз на 5 секунд читає локальні
+netlink-дані через `ip -details -json address` і `ip -json -4 route show table main`.
+Це не ICMP/TCP/Modbus-перевірки та не звернення до інверторів.
+
+LAN дозволяється лише за одночасного виконання умов:
+
+1. Фізичний Ethernet/WiFi NIC має `UP`, `BROADCAST`, стан `UP` і sysfs `device`.
+   Віртуальні bridge/veth/tun/PPP та неактивні інтерфейси не приймаються.
+2. IPv4-адреса global scope належить саме RFC1918, а весь префікс лежить у
+   `10/8`, `172.16/12` або `192.168/16`. Ці діапазони — класи приватних адрес,
+   а не зафіксована локальна підмережа сервера.
+3. Префікс має довжину від /16 до /30. Надто широкі та /31-/32 мережі
+   вважаються неоднозначними; LAN-доступ для них автоматично не відкривається.
+4. Є рівно один відповідний unicast-маршрут `scope link` на тому самому NIC,
+   без gateway/via/nexthops/nhid, без linkdown; prefsrc узгоджений з адресою.
+   DHCP-маршрут підтримується, обмеження лише на `protocol kernel` немає.
+5. Немає перекриття цього LAN-префікса між різними прийнятними інтерфейсами.
+
+Публічний IPv4, IPv6 LAN, link-local та Starlink CGNAT `100.64/10` через фізичний
+інтерфейс не отримують LAN-дозволу. За прямого WAN/CGNAT-підключення сервер
+залишається доступним через налаштований Tailscale. За Starlink-роутером із
+звичайною приватною LAN відповідний перевірений LAN-префікс визначається сам.
+
+Набір nftables містить трійки **інтерфейс + префікс джерела + локальна адреса
+призначення**. Додатково перевіряються зворотний маршрут через вхідний інтерфейс
+і локальний тип адреси призначення. Стара адреса, якої вже немає на хості,
+не стає дозволом для іншої адреси на новому інтерфейсі.
+
+LAN-елементи мають timeout **15 секунд**, поновлюються кожні 5 секунд. При
+відмові визначення встановлюється порожній LAN-набір; при відмові nft/процесу
+попередні LAN-елементи самі спливають. Першим кроком служба встановлює порожній
+захисний набір, і лише потім намагається визначити LAN. Початковий `READY=1`
+повідомляється після успішного встановлення правил.
+
+Дозвіл для **tailscale0** залежить від вхідного інтерфейсу, а не конкретної адреси
+`100.x` чи IPv6. Діапазон `100.64/10` загалом не відкривається.
+
+## Межа довіри та безпечний окремий варіант
+
+Автоматично встановити довіреність довільної мережі лише за IP неможливо.
+LAN-режим припускає довірений локальний сегмент і роутер, який не підміняє
+адреси перенаправлених з інтернету HTTP-клієнтів на власну LAN-адресу.
+Звичайний port forwarding зі збереженням публічної адреси джерела буде
+заблокований. Якщо роутер робить також source NAT до довіреної LAN-адреси,
+сервер не може відрізнити цей трафік від локального клієнта. Налаштування
+роутера тут не перевірялись і не змінювались.
+
+Для недовіреної LAN, готелю, публічної мережі або невідомого NAT використовуйте
+окремий варіант **Tailscale + loopback, без LAN HTTP**. Перед активацією під root:
 
 ```bash
-cd /opt/ingecon-control
-.venv/bin/python -m deploy.prepare_portal
+install -d -o root -g root -m 0755 /etc/ingecon-control
+printf '%s\n' 'INGECON_HTTP_LAN=false' > /etc/ingecon-control/http-guard.env
+chown root:root /etc/ingecon-control/http-guard.env
+chmod 0644 /etc/ingecon-control/http-guard.env
 ```
 
-Команда робить новий backup, перевіряє наявність `stewe`, створює приватні
-конфігураційні файли тільки за їх відсутності. Наявний ключ не перезаписується.
-Паролі користувачів, токен Telegram і дані `instance/demo/` не копіюються в
-нову БД та не змінюються. Backup не означає дозвіл на наступну міграцію.
+Сценарій активації зберігає наявний `http-guard.env`. Після активації зміна
+цього параметра застосовується перезапуском guard-служби; `BindsTo` може
+зупинити Nginx, тому порядок такий:
 
-## Схема доступу
+```bash
+systemctl restart ingecon-http-guard.service
+systemctl start nginx.service
+```
+
+Для довіреної LAN значення `INGECON_HTTP_LAN=true` вмикає описане динамічне
+визначення. Невідома або неприйнятна підмережа не замінюється широким allow.
+
+## Firewall і збереження доступу
+
+`deploy/nftables/http-guard.nft` замінює атомарно тільки власну таблицю
+`inet ingecon_http_portal`; `destroy` підтримується Debian 13 nftables 1.1.3.
+Стороння таблиця з таким самим ім’ям, але без маркера власності, відхиляється.
+Немає глобального `flush ruleset`, змін policy інших таблиць, output/forward
+hooks або правил для SSH/UDP/Tailscale transport. Наш input-chain має policy
+accept і відкидає **лише TCP destination port 80**, крім дозволених джерел.
+
+Loopback і `tailscale0` допускаються до HTTP; інші адреси проходять лише за
+перевіреним LAN-набором. Решта IPv4/IPv6 HTTP відкидається. Allow у нашій
+base chain не обходить заборони в інших таблицях. Якщо чинна політика вже
+забороняє LAN/Tailscale HTTP, її не послаблюють автоматично: потрібно окремо
+перевірити root ruleset і причину недоступності.
+
+До застосування сценарій зберігає текстовий та JSON ruleset у новий каталог
+`/root/ingecon-task07-XXXXXXXX` із правами 0700; також копіює Nginx, наявні
+unit/drop-in та `/etc/ingecon-control`. Виконується `nft --check`.
+`nftables.service` не перезапускається: системний `/etc/nftables.conf` може
+містити глобальний flush, що зачепив би Tailscale/SSH.
+
+Якщо TCP:80 зайнятий стороннім процесом, сценарій зупиняється до змін.
+SSH:22, tailscaled, маршрути, DNS, вихідні з’єднання та роутер не змінюються.
+З поточними правами правила ядра прочитати/перевірити не вдалося; root-кроки
+не можна вважати виконаними за результатами offline-тестів.
+
+## БД, авторизація, секрети та заблоковане керування
+
+Єдина production SQLite: `/opt/ingecon-control/instance/production/ingecon.sqlite`.
+Демо й `instance/database.db` не підключаються. Factory перевіряє точний шлях,
+наявність повної схеми, відсутність demo-маркера; автоматичного DDL немає.
+
+До змін TASK-07 зроблено нову перевірену SQLite backup API-копію:
 
 ```text
-Браузер з 192.168.10.0/24
-    → 192.168.10.234:80 (Nginx, monitoring.local)
-    → 127.0.0.1:5000 (Gunicorn, Flask)
-    → instance/production/ingecon.sqlite
-
-Telegram polling → та сама production-БД, той самий bot.key
+/opt/ingecon-control/instance/production/backups/pre-http-portal-20261018T083016.206719Z.sqlite
 ```
 
-VPN, SSL-сертифікати, HTTPS-listener, перенаправлення на HTTPS і публічний
-webhook не створюються. Налаштування роутера й port forwarding не змінюються.
-Telegram продовжує використовувати власний вихідний HTTPS до Telegram API;
-це не HTTPS для вебпорталу.
+Джерело відкривалось read-only, `PRAGMA quick_check` копії успішний.
+Backup-файли 0600, каталог 0700. Сценарій root перед активацією робить ще одну
+свіжу копію від імені `codex`, включно зі committed WAL. Старі копії не видаляються.
+Записи користувача `stewe`, паролі, ролі, токен і demo не перезаписуються.
+Порівняння після розробки підтвердило однакову схему й вміст усіх 14 таблиць
+із цією копією, включно з повним записом `stewe`. Побайтове порівняння файлів
+SQLite не використовується як доказ: backup API може змінювати службовий
+заголовок копії, зберігаючи ті самі дані.
 
-Ім’я `server_name monitoring.local` не створює DNS-запис. На клієнтських
-комп’ютерах потрібний локальний DNS/hosts-запис:
-
-```text
-192.168.10.234 monitoring.local
-```
-
-DNS, mDNS/Avahi та клієнтські hosts автоматично не змінюються. Після активації
-також працюватиме `http://192.168.10.234`. Адреса `.234` має залишатися адресою
-цього сервера; при її зміні конфігурацію потрібно переглянути.
-
-## Cookie, ключ і авторизація
-
-`INGECON_COOKIE_SECURE` має default **true**. Приймаються лише явні `true`
-або `false`, без урахування регістру; порожнє чи невідоме значення зупиняє
-створення застосунку. Для внутрішнього HTTP у приватному файлі явно задано false.
-Програмне boolean-налаштування factory, зокрема демо, також є явною конфігурацією.
-
-`deploy/portal.env.example` копіюється без секретних значень у
-`instance/production/portal.env` (0600):
+`instance/production/portal.env` — приватний файл 0600:
 
 ```ini
 INGECON_DATABASE_URI=sqlite:////opt/ingecon-control/instance/production/ingecon.sqlite
@@ -103,178 +181,142 @@ PYTHONDONTWRITEBYTECODE=1
 PYTHONUNBUFFERED=1
 ```
 
-Ключ `INGECON_SECRET_KEY` зберігається вмістом `web-secret.key` (0600), поза Git,
-а не відкритим значенням у unit-файлі. Він створений один раз криптографічно
-випадково; існуючий секрет із середовища при першій підготовці зберігається
-замість генерації нового. Запуск/перезапуск лише читає файл, не генерує ключ.
-Перевіряються власник, приватні права, звичайний файл, відсутність symlink і
-довжина щонайменше 32 символи. Одночасні `INGECON_SECRET_KEY` і
-`INGECON_SECRET_KEY_FILE` відхиляються як неоднозначна конфігурація.
+Наявний `web-secret.key` 0600 залишається постійним і не потрапляє в Git.
+Перевіряються власник, права, довжина та відсутність symlink. Підготовка створює
+ключ лише за відсутності; перезапуск застосунку його ніколи не генерує.
+Наявний Telegram-токен використовується за старим шляхом
+`/opt/ingecon-control/instance/telegram/bot.key`, без копіювання й показу значення.
 
-HTTPOnly, SameSite=Lax, CSRF для всіх форм/команд, ролі, scrypt, ліміти входів
-і перевірка session_version залишаються чинними. Debug/reloader вимкнено.
-HTTP не шифрує дані; цей режим призначений для вказаної довіреної LAN.
-Production factory `portal.create_portal_app` відхиляє іншу або непідготовлену
-БД та demo-маркер; автоматичного `create_all` немає.
+`INGECON_COOKIE_SECURE` за замовчуванням true, false дозволено лише явно;
+невідоме значення припиняє запуск. HTTPOnly, SameSite=Lax, CSRF, авторизація,
+scrypt, ролі та ліміти входу збережені. HTTP у LAN не шифрує пароль і cookie;
+Tailscale шифрує трафік між своїми вузлами.
 
-## Gunicorn і довіра до проксі
+Nginx перезаписує X-Forwarded-For адресою клієнта. ProxyFix довіряє цьому
+заголовку тільки від 127.0.0.1; forwarded Host/proto/port/prefix ігноруються.
+Дозволені Host: monitoring.local, localhost, loopback і поточні адреси сервера
+з root-owned `/run/ingecon-http-guard/state.json`. Перевірка йде до завантаження
+користувача; файл перечитується при запиті, зміна DHCP не потребує restart Flask.
+Відсутній/пошкоджений/небезпечний файл не дозволяє довільні Host.
 
-`deploy/gunicorn.conf.py`: `127.0.0.1:5000`, один gthread-worker, два потоки,
-timeout 30 секунд, службові heartbeat-файли в `/run/ingecon-web`, без daemon mode.
-Nginx вже журналює запити, тому дубль access log у Gunicorn вимкнений.
-`secure_scheme_headers={}` не дозволяє вважати HTTP-запит HTTPS за заголовком.
+`MODBUS_WRITES_ENABLED=False`; у вебі й Telegram конструктори реальних
+пристроєвих транспортів блокуються. Запуск монітора й інверторні перевірки
+не включено в активацію. Фізичне керування лишається забороненим.
 
-WSGI entry point — `portal_wsgi:app`. Довірені Host: `monitoring.local`,
-`192.168.10.234`, `localhost`, `127.0.0.1`; решта отримують 400.
-ProxyFix приймає тільки один X-Forwarded-For і лише від loopback-підключення.
-Host/proto/port/prefix із forwarded-заголовків не використовуються.
-Nginx **перезаписує** X-Forwarded-For реальною адресою клієнта, тому ліміти
-авторизації не зводяться до одного `127.0.0.1` та не довіряють заголовку браузера.
+## Systemd та один Telegram polling
 
-Конструктори Modbus/NetworkProbes у вебпроцесі блокуються; конфігурація
-`MODBUS_WRITES_ENABLED=False`. Telegram зберігає свою безумовну заборону
-керування. Новий монітор чи опитування інверторів не запускаються.
+- `ingecon-web`: один Gunicorn gthread-worker, два потоки, MemoryMax 256M;
+  bind loopback, heartbeat worker-файли у `/run/ingecon-web`, debug off.
+- `ingecon-telegram`: той самий production SQLite і bot.key, MemoryMax 384M;
+  long polling без нового екземпляра поверх ручного.
+- `ingecon-http-guard`: stdlib Python, 5-секундне оновлення, MemoryMax 64M,
+  Type=notify, watchdog 30 секунд, Restart=on-failure. Запускає root-owned
+  `/usr/local/libexec/ingecon-http-guard.py` із `python3 -I`; не виконує код
+  із доступного користувачу застосунку каталогу. Мережеві сімейства тільки
+  AF_NETLINK/AF_UNIX, capability лише CAP_NET_ADMIN.
+- Nginx `BindsTo` guard і стартує після його готовності. При відмові guard
+  Nginx зупиняється; правила не видаляються. Після відновлення guard перевірте
+  стан Nginx і за потреби виконайте `systemctl start nginx`.
 
-## Nginx і мережеві правила
+Веб і бот працюють як існуючий Linux `codex`. Вебкористувач `stewe` не змінюється.
+ProtectSystem=strict, UMask 0077, приватні ReadWritePaths збережені. Web не бачить
+токен, бот не бачить вебключ, обидва не бачать demo та резервні копії.
+Обидва використовують існуючий `instance/locks`; lock-файли не видаляються.
+Бот бере flock за БД і bot ID до Telegram polling.
 
-`deploy/nginx/ingecon-control.conf`:
+## Точні команди активації від root
 
-```nginx
-server {
-    listen 192.168.10.234:80 default_server;
-    server_name monitoring.local;
-    allow 127.0.0.1;
-    allow 192.168.10.0/24;
-    deny all;
-    client_max_body_size 64k;
-    location / {
-        proxy_pass http://127.0.0.1:5000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $remote_addr;
-        proxy_set_header X-Forwarded-Proto http;
-    }
-}
+Не встановлюються пакети й не змінюється SSH. Потрібні вже наявні Debian
+Nginx/nftables/systemd, налаштований Tailscale та проєктне `.venv`.
+Перегляньте конфігурацію та сценарій перед запуском:
+
+```bash
+cd /opt/ingecon-control
+less deploy/activate_portal.sh
+less deploy/nftables/http-guard.nft
+less deploy/nginx/ingecon-control.conf
 ```
 
-Повний файл у Git додатково очищає forwarded-заголовки та задає timeout.
-`127.0.0.1` — IPv4 localhost, узгоджений із bind Gunicorn без неоднозначності IPv6.
-Чинний стандартний сайт із wildcard IPv4/IPv6 listener потрібно відключити
-лише після підтвердження; інакше він продовжить слухати інші адреси.
+У **root shell**, після вибору довіреної LAN або варіанта Tailscale-only вище:
 
-`deploy/nftables/http-guard.nft` атомарно замінює **тільки** таблицю
-`inet ingecon_http_portal`: loopback:80 дозволено, `enp1s0` + IPv4-джерело
-`192.168.10.0/24` + TCP:80 дозволено, решта TCP:80 відкидається, включно
-з віддаленим IPv6. Policy accept та відсутність інших drop-правил означають,
-що SSH:22, вихідний Telegram HTTPS і сторонні правила не змінюються.
+```bash
+cd /opt/ingecon-control
+bash /opt/ingecon-control/deploy/activate_portal.sh
+runuser -u codex -- /opt/ingecon-control/.venv/bin/python -m deploy.check_portal
+```
 
-Глобального `flush ruleset` немає. Системний `/etc/nftables.conf` містить його,
-тому цей файл не перезаписується й `nftables.service` тут не запускається.
-Окремий guard-unit завантажує вузьке правило після наявного nftables.service,
-якщо той бере участь у boot, і перед Nginx. Nginx Requires цей guard; при його
-помилці новий HTTP listener не повинен запускатися. Guard не видаляє захист
-при stop. У чужих base chains можуть існувати додаткові заборони: allow у
-нашій таблиці їх не обходить. Чинний ruleset потребує читання й перевірки root
-перед застосуванням; з поточними правами його не було прочитано.
+Це точні команди; пароль у чаті або аргументах не потрібний. Сценарій робить
+backup до змін, перевіряє candidate nft, встановлює root-owned guard/config,
+unit-файли, запускає захист перед Nginx, перевіряє `nginx -t`, запускає веб і
+бота, вмикає автозапуск чотирьох служб. Стандартний Debian symlink сайту
+відключається після його backup. Невідомі сайти не видаляються: перехід
+зупиняється для ручного аналізу. При помилці сценарій припиняється без
+автоматичного rollback усієї БД або глобального ruleset.
 
-## Systemd та єдиний Telegram polling
+Якщо знайдено ручний бот, сценарій друкує лише PID і завершується **до змін**.
+Перевірте локально команду, користувача, БД й token-file цього процесу; після
+підтвердження ідентичності можна виконати `kill -TERM <перевірений_PID>`,
+дочекатися завершення й повторити сценарій. Старі PID зі звітів не
+використовувати, SIGKILL та `pkill -f` не потрібні. За невідомого polling з
+тим самим ботом на іншій машині спочатку зупиніть саме той polling.
 
-Підготовлено:
+Повторний запуск сценарію може перезапустити guard, через BindsTo також
+короткочасно зупинити Nginx. Він знову запускає Nginx після готовності guard.
+Активні Gunicorn/Telegram не перезапускаються автоматично при повторному
+`systemctl start`; оновлення їх коду потребує окремого контрольованого restart.
 
-| Файл | Призначення |
-|---|---|
-| `deploy/systemd/ingecon-web.service` | Gunicorn, localhost:5000, приватний env-файл |
-| `deploy/systemd/ingecon-telegram.service` | Той самий production SQLite і наявний bot.key |
-| `deploy/systemd/ingecon-http-guard.service` | Вузьке правило TCP:80, постійне після reboot |
-| `deploy/systemd/nginx.service.d/ingecon.conf` | Порядок guard/network-online перед Nginx, retry при помилці старту |
+## Перевірки після активації
 
-Служби застосунку працюють як існуючий Linux `codex`, власник БД/ключів.
-Вебкористувач `stewe` не перейменовується і не стає іншим системним акаунтом.
-UMask 0077, NoNewPrivileges, ProtectSystem=strict, ProtectHome, обмежені
-ReadWritePaths, MemoryMax 256M для вебу й 384M для бота. Web не бачить bot.key,
-бот не бачить web-secret.key; обидва не бачать demo й backup-каталог.
+`deploy.check_portal` не запускає polling і не звертається до інверторів.
+Він перевіряє active/enabled вебу, бота, Nginx, guard і наявного Tailscale,
+локальний Gunicorn, локальний Nginx, HTTP через поточну Tailscale IPv4:
 
-`INGECON_LOCK_DIR` однаковий із наявним polling. Lock-файли не видаляються.
-Сам бот бере flock за БД та bot ID до Telegram polling. Проте запуск другого
-процесу для отримання помилки блокування не використовується як перевірка:
-спочатку погоджено зупиняємо існуючий процес, чекаємо його завершення, потім
-запускаємо службу. Токен не переміщується, не переписується та не виводиться.
+- GET `/login` → 200;
+- анонімний GET `/api/statuses` → 401;
+- POST `/login` без CSRF → 400, до перевірки облікових даних;
+- cookie без Secure тільки для явного HTTP, з HttpOnly і SameSite=Lax;
+- рівно один Telegram poller, його PID відповідає MainPID systemd;
+- тільки Telegram `getMe`, токен і помилки з URL ніколи не друкуються.
 
-## Активація — тільки після підтвердження
+Додатково root-команди:
 
-Нижче привілейовані кроки для майбутнього погодженого виконання. Вони ще
-**не виконані**. Потрібний root shell або дозволений sudo; паролі в чат не потрібні.
+```bash
+ss -ltnp
+systemctl status --no-pager ingecon-http-guard ingecon-web ingecon-telegram nginx tailscaled
+systemctl is-enabled ingecon-http-guard ingecon-web ingecon-telegram nginx
+nft list table inet ingecon_http_portal
+journalctl -u ingecon-http-guard -u ingecon-web -u ingecon-telegram -u nginx -n 80 --no-pager
+```
 
-1. Повторно перевірити адреси, SSH:22, TCP:5000, поточний PID бота і всі інші
-   процеси з цим токеном. Якщо на 5000 з’явився інший сервер, автоматично його
-   не зупиняти. Зробити свіжий SQLite backup наведеною командою під користувачем
-   `codex`, зберегти root-копії поточних Nginx/unit-файлів і `nft list ruleset`.
-   Перевірити, що наявна таблиця `ingecon_http_portal`, якщо існує, належить цьому
-   застосунку; не перезаписувати невідому політику.
-2. Під root виконати dry-run:
+Gunicorn повинен слухати **тільки 127.0.0.1:5000**, Nginx — wildcard :80.
+Перевірте, що журнали бота не містять polling conflict 409; за його наявності
+не запускайте додаткові екземпляри. Не публікуйте журнали без перегляду секретів.
 
-   ```bash
-   /usr/sbin/nft --check --file /opt/ingecon-control/deploy/nftables/http-guard.nft
-   ```
+З іншого пристрою Tailscale відкрийте **http://100.84.37.60/** (або його нову
+поточну VPN-адресу). Із LAN перевірте поточну адресу сервера й monitoring.local.
+Власник входить як stewe своїм існуючим паролем у браузері; пароль не
+запитується в чаті та не скидається для тесту. Перевірте статуси, історію,
+прив’язку Telegram і меню; команди керування мають залишатись blocked.
 
-3. Після успішних перевірок встановити підготовлені файли:
+Перевірка власної VPN-адреси з цього сервера не доводить прохід через
+вхідний tailscale0: потрібний окремий клієнт. Так само localhost не доводить
+зовнішню фільтрацію. Не використовуйте інвертори для цих тестів. Reboot не
+виконується: enabled підтверджує boot-конфігурацію, реальний cold boot треба
+перевірити у погоджене вікно, маючи збережений SSH/Tailscale-доступ.
 
-   ```bash
-   cd /opt/ingecon-control
-   install -d -m 0755 /etc/ingecon-control /etc/systemd/system/nginx.service.d
-   install -m 0644 deploy/nftables/http-guard.nft /etc/ingecon-control/http-guard.nft
-   install -m 0644 deploy/systemd/ingecon-web.service /etc/systemd/system/ingecon-web.service
-   install -m 0644 deploy/systemd/ingecon-telegram.service /etc/systemd/system/ingecon-telegram.service
-   install -m 0644 deploy/systemd/ingecon-http-guard.service /etc/systemd/system/ingecon-http-guard.service
-   install -m 0644 deploy/systemd/nginx.service.d/ingecon.conf /etc/systemd/system/nginx.service.d/ingecon.conf
-   install -m 0644 deploy/nginx/ingecon-control.conf /etc/nginx/sites-available/ingecon-control.conf
-   systemctl daemon-reload
-   systemctl start ingecon-http-guard.service
-   ```
+## Відмова й відкат
 
-4. Після резервування Nginx-конфігурації відключити **лише** відомий symlink
-   `/etc/nginx/sites-enabled/default`, увімкнути посилання на новий файл,
-   виконати root `nginx -t`. При помилці не перезавантажувати Nginx, відновити
-   його конфігурацію з копії. Наявний master не зупиняти.
-5. Запустити `ingecon-web.service`, перевірити localhost, потім reload Nginx.
-   Застосування ACL/listen і правила TCP:80 є саме погодженою мережевою зміною.
-6. Повторно перевірити наявність polling. Якщо він знову працює — перевірити
-   ідентичність його поточного PID, надіслати йому **лише погоджений SIGTERM**,
-   дочекатись завершення. Старий PID 1397 не використовувати. Якщо процес
-   не завершився — зупинити перехід, без автоматичного SIGKILL або нового polling.
-   Перевірити відсутність іншого polling, потім стартувати `ingecon-telegram.service`.
-7. Лише після перевірки служб активувати автозапуск:
+При незрозумілій LAN використовуйте Tailscale-only, а не ширше правило.
+При помилці Nginx відновлюйте лише потрібні конфігураційні файли з root-backup,
+перевіряйте `nginx -t`, зберігаючи HTTP guard. Не виконуйте глобальний
+`flush ruleset`, не завантажуйте весь старий snapshot поверх чинних правил
+Tailscale й не змінюйте SSH. Збережений ruleset призначений для аналізу та
+вибіркового відновлення відповідних правил, а не сліпого replay.
 
-   ```bash
-   systemctl enable ingecon-web.service ingecon-telegram.service ingecon-http-guard.service nginx.service
-   systemctl is-active ingecon-web.service ingecon-telegram.service ingecon-http-guard.service nginx.service
-   systemctl is-enabled ingecon-web.service ingecon-telegram.service ingecon-http-guard.service nginx.service
-   ```
-
-Перезавантаження ОС не виконується без окремого запиту. Перевірка enable
-підтверджує налаштування boot; реальний cold boot ще не перевірявся.
-
-## Перевірки після активації й відкат
-
-- `ss -ltnp`: Gunicorn тільки `127.0.0.1:5000`, Nginx тільки `192.168.10.234:80`,
-  SSH:22 з попередніми адресами. Правило nftables охоплює лише TCP:80.
-- `GET /login` → 200; анонімний `/api/statuses` → 401; POST без CSRF → 400.
-  Авторизацію зі справжнім паролем `stewe` власник перевіряє у браузері;
-  пароль не запитується в чаті й не скидається для тесту.
-- Cookie без Secure лише за явним false, з HttpOnly/SameSite=Lax. Debug off,
-  усі Modbus-команди → blocked. Інверторні мережеві перевірки не виконуються.
-- Для Telegram — рівно один polling MainPID, та сама БД/токен, без conflict 409.
-  Безпечний `getMe` уже пройшов: `@ingecon_bot`; getUpdates та sendMessage для
-  цієї перевірки не викликались, другого polling не було.
-- Доступ із LAN перевіряється клієнтським браузером; зовнішній TCP:80 має бути
-  закритий правилом. Перевірка тільки з цього хоста не доводить зовнішню фільтрацію.
-  Не використовувати реальні інвертори як тестові джерела трафіку.
-
-При проблемі конфігурації відновлюємо тільки погоджені Nginx/unit-файли з копії.
-Не відновлювати всю SQLite зі старого знімка автоматично: це втратить нові
-штатні записи. Ключ, токен, `stewe` та demo не видаляються й не перегенеровуються.
-Не завантажувати весь старий ruleset поверх чинного, не очищати SSH-правила.
-LAN-захист TCP:80 зберігається; його зняття потребує окремого погодження.
-При поверненні до ручного polling спочатку переконатись, що systemd polling зупинений.
+Не відновлюйте production SQLite автоматично: це зітре нові штатні записи.
+Не видаляйте ключі, токен, stewe, demo або lock-файли. Перед поверненням до
+ручного Telegram спочатку зупиніть відповідну systemd-службу й перевірте
+завершення її процесу. Зупинка guard не видаляє захист; LAN-оренди спливають.
 
 ## Автоматичні перевірки підготовки
 
@@ -283,28 +325,27 @@ LAN-захист TCP:80 зберігається; його зняття потр
 node tests/js/dashboard.test.cjs
 node tests/js/panel.test.cjs
 .venv/bin/python -m pip check --disable-pip-version-check --no-cache-dir
+bash -n deploy/activate_portal.sh
 systemd-analyze verify deploy/systemd/ingecon-web.service deploy/systemd/ingecon-telegram.service deploy/systemd/ingecon-http-guard.service
 git diff --check
 ```
 
-Тести HTTP-порталу використовують **окремі синтетичні SQLite**, штучного
-користувача з ім’ям stewe та mock Modbus/Telegram, без реальних інверторів і
-без HTTP-слухача. Gunicorn `--check-config` пройшов із синтетичним WSGI/SQLite;
-systemd verify успішний. Парсер Nginx повідомив `syntax is ok`, але повний
-nginx -t на привілейованому порту 80 не завершився без root. `nft --check`
-не пройшов через відсутність NET_ADMIN/root; застосування правил не виконувалось.
-Повна root-перевірка Nginx, ruleset, active/enabled і єдиного systemd polling
-залишається обов’язковою частиною погодженої активації.
+Пройшли **466 Python-тестів**, зокрема 33 додаткові перевірки TASK-07;
+**17 JS-тестів**, pip check, bash syntax і systemd verify також успішні.
+Тести використовують синтетичні SQLite та mock Telegram/Modbus; socket і
+subprocess для зовнішніх запитів заблоковані fixture. Перевірено зміну LAN,
+DHCP, відмову маршруту, CGNAT/public WAN, віртуальні NIC, перекриття підмереж,
+Tailscale IPv4/IPv6, Host validation без restart, збереження SSH/output-scope,
+fail-closed baseline до READY, помилку discovery, приватність runtime state,
+авторизацію, CSRF, заблоковані команди та послідовність root-backup.
 
-Підсумок автоматичних тестів: **433 Python-тести пройшли**, з них **25 тестів
-HTTP-порталу**, без xfailed і попереджень pytest; **17 JS-тестів пройшли**.
-`pip check`, Gunicorn `--check-config`, systemd verify і `git diff --check`
-успішні. Порівняння повного запису `stewe` з перевіреним backup підтвердило,
-що він не змінився. Жодного Modbus-запиту чи write під час перевірок не було.
+Неможливо підтвердити повну перевірку/завантаження nft без NET_ADMIN: поточний
+`nft --check` повертає `cache initialization failed: Operation not permitted`.
+Root syntax/kernel check, реальні active/enabled після переходу, getMe й доступ
+із віддаленого Tailscale-клієнта залишаються кроками активації, а не виконаними
+результатами тестів. Жодного Modbus-запиту або Modbus write не було.
 
-Джерела для конфігурації:
-[Gunicorn settings](https://gunicorn.org/reference/settings/),
-[Nginx proxy](https://nginx.org/en/docs/http/ngx_http_proxy_module.html),
-[Nginx access](https://nginx.org/en/docs/http/ngx_http_access_module.html),
-[Debian 13 nft](https://manpages.debian.org/trixie/nftables/nft.8.en.html),
-[systemd.exec](https://www.freedesktop.org/software/systemd/man/257/systemd.exec.html).
+Джерела: [nftables, FIB, sets і timeout](https://www.netfilter.org/projects/nftables/manpage.html),
+[systemd.service, notify/watchdog](https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html),
+[systemd.unit, BindsTo](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html),
+[Nginx proxy headers](https://nginx.org/en/docs/http/ngx_http_proxy_module.html).

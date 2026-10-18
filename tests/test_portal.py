@@ -97,9 +97,9 @@ def test_proxy_trust_and_host_scheme_spoofing(http_portal):
     def probe():
         return jsonify(ip=request.remote_addr,scheme=request.scheme,host=request.host)
     client = http_portal.test_client()
-    headers = {'X-Forwarded-For':'192.168.10.42','X-Forwarded-Proto':'https','X-Forwarded-Host':'evil.invalid'}
+    headers = {'X-Forwarded-For':'10.42.0.42','X-Forwarded-Proto':'https','X-Forwarded-Host':'evil.invalid'}
     result = client.get('http://monitoring.local/test-proxy',headers=headers,environ_overrides={'REMOTE_ADDR':'127.0.0.1'})
-    assert result.json == dict(ip='192.168.10.42',scheme='http',host='monitoring.local')
+    assert result.json == dict(ip='10.42.0.42',scheme='http',host='monitoring.local')
     remote = client.get('http://monitoring.local/test-proxy',headers=headers,environ_overrides={'REMOTE_ADDR':'198.51.100.2'})
     assert remote.json['ip'] == '198.51.100.2'
     assert client.get('http://evil.invalid/login').status_code == 400
@@ -204,16 +204,19 @@ def test_gunicorn_is_loopback_http_and_small():
 
 def test_deployment_config_scope_and_single_bot():
     nginx = (ROOT/'deploy'/'nginx'/'ingecon-control.conf').read_text()
-    assert 'listen 192.168.10.234:80' in nginx and 'server_name monitoring.local;' in nginx
+    assert 'listen 80 default_server;' in nginx and 'listen [::]:80 default_server;' in nginx
+    assert 'server_name monitoring.local;' in nginx
     assert 'proxy_pass http://127.0.0.1:5000;' in nginx
     assert 'ssl_certificate' not in nginx and 'listen 443' not in nginx
-    assert 'allow 192.168.10.0/24;' in nginx and 'deny all;' in nginx
+    assert '192.168.' not in nginx and 'allow ' not in nginx
     assert 'X-Forwarded-For $remote_addr;' in nginx
     guard = (ROOT/'deploy'/'nftables'/'http-guard.nft').read_text()
     lines = [line for line in guard.splitlines() if not line.lstrip().startswith('#')]
     actual = '\n'.join(lines)
     assert 'flush ruleset' not in actual and 'destroy table inet ingecon_http_portal' in actual
-    assert '192.168.10.0/24 tcp dport 80 accept' in actual
+    assert 'iifname "tailscale0" tcp dport 80 accept' in actual
+    assert '@lan_v4 accept' in actual and 'timeout 15s' in actual
+    assert 'fib saddr . iif oif exists' in actual
     assert 'tcp dport 80 counter drop' in actual and 'policy accept;' in actual
     assert 'dport 22' not in actual and 'hook output' not in actual
     web = (ROOT/'deploy'/'systemd'/'ingecon-web.service').read_text()

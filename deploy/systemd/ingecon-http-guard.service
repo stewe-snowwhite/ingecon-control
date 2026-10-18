@@ -1,14 +1,36 @@
 [Unit]
-Description=Restrict ingecon HTTP to the local IPv4 network
-After=nftables.service
+Description=Dynamic HTTP guard for Tailscale and directly connected private LAN
+After=nftables.service network.target
 Before=nginx.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/sbin/nft -f /etc/ingecon-control/http-guard.nft
-ExecReload=/usr/sbin/nft -f /etc/ingecon-control/http-guard.nft
-# No ExecStop: stopping a unit must not silently remove network protection.
+Type=notify
+NotifyAccess=main
+EnvironmentFile=-/etc/ingecon-control/http-guard.env
+ExecStart=/usr/bin/python3 -I /usr/local/libexec/ingecon-http-guard.py --run
+Restart=on-failure
+RestartSec=2
+WatchdogSec=30
+TimeoutStartSec=30
+RuntimeDirectory=ingecon-http-guard
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+UMask=0022
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+CapabilityBoundingSet=CAP_NET_ADMIN
+RestrictAddressFamilies=AF_NETLINK AF_UNIX
+ReadWritePaths=/run/ingecon-http-guard
+MemoryMax=64M
+TasksMax=8
+# No ExecStop: rules persist; LAN leases expire after at most 15 seconds.
 
 [Install]
 WantedBy=multi-user.target
