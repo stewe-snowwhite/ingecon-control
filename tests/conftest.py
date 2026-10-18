@@ -25,6 +25,7 @@ def isolation(monkeypatch, tmp_path):
     monkeypatch.setenv('INGECON_SECRET_KEY', 'test-only-random-looking-key-32-chars')
     monkeypatch.delenv('INGECON_SECRET_KEY_FILE', raising=False)
     monkeypatch.delenv('INGECON_COOKIE_SECURE', raising=False)
+    monkeypatch.delenv('INGECON_TELEGRAM_CONTROL_CONFIG', raising=False)
     monkeypatch.chdir(tmp_path)
     import pymodbus.client
     monkeypatch.setattr(pymodbus.client, 'ModbusTcpClient', FakeModbusTcpClient)

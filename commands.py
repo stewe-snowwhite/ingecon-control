@@ -1,16 +1,15 @@
-"""Shared web/Telegram control boundary; only the web's explicit policy can write.
-
-Telegram has no enable switch in TASK-06. All real writes remain unauthorized.
-"""
-from modbus_utils import modbus_limit_power, modbus_turn_off, modbus_turn_on
+"""Shared role/validation boundary; writes require an explicit source policy."""
+from modbus_utils import modbus_control, modbus_limit_power, modbus_turn_off, modbus_turn_on
 
 
 class ControlBlocked(ValueError):
     pass
 
 
-def block_reason(*, writes_enabled=False, source='web'):
-    if source == 'telegram':
+def block_reason(*, writes_enabled=False, source='web', telegram_policy=None):
+    if source not in ('web', 'telegram'):
+        return 'Невідоме джерело команди.'
+    if source == 'telegram' and not (telegram_policy and telegram_policy.enabled):
         return 'Керування через Telegram заблоковано до окремого дозволу. Modbus-запис не виконувався.'
     if writes_enabled is not True:
         return 'Modbus-записи заблоковано.'
@@ -23,24 +22,40 @@ def command_payload(user, action, value, inverters):
             'targets': [[inv.id, inv.name, inv.group, inv.ip_address] for inv in inverters]}
 
 
-def execute_devices(user, action, inverters, value=100, *, writes_enabled=False, source='web'):
+def execute_devices(user, action, inverters, value=100, *, writes_enabled=False, source='web', telegram_policy=None):
     if not user.active or user.role not in ('Administrator', 'Operator'):
         raise ControlBlocked('Недостатньо прав для керування.')
     if action not in ('on','off','limit','limit_max') or type(value) is not int or not 1 <= value <= 100:
         raise ValueError('Некоректна команда або відсоток потужності.')
     if not 1 <= len(inverters) <= 100 or len({inv.id for inv in inverters}) != len(inverters):
         raise ValueError('Некоректний список інверторів.')
-    reason = block_reason(writes_enabled=writes_enabled, source=source)
+    reason = block_reason(writes_enabled=writes_enabled, source=source, telegram_policy=telegram_policy)
     if reason:
         raise ControlBlocked(reason)
+    profiles = None
+    if source == 'telegram':
+        try:
+            profiles = telegram_policy.validate(inverters, action)
+        except ValueError as error:
+            raise ControlBlocked(str(error)) from error
     results = []
-    for inv in inverters:
-        if action == 'on':
+    for index, inv in enumerate(inverters):
+        if profiles is not None:
+            profile = profiles[index]
+            result = modbus_control(inv.ip_address, port=profile.port, device_id=profile.device_id,
+                address=profile.start_address if action == 'on' else profile.stop_address,
+                value=profile.start_value if action == 'on' else profile.stop_value, allow_write=True)
+        elif action == 'on':
             result = modbus_turn_on(inv.ip_address, allow_write=True)
         elif action == 'off':
             result = modbus_turn_off(inv.ip_address, allow_write=True)
         else:
             result = modbus_limit_power(inv.ip_address, value=value, allow_write=True)
-        results.append(dict(id=inv.id, name=inv.name,
-            outcome='register_confirmed' if result.confirmed else 'unconfirmed', message=result.message))
+        row = dict(id=inv.id, name=inv.name,
+            outcome='register_confirmed' if result.confirmed else 'unconfirmed', message=result.message)
+        if profiles is not None:
+            row['command'] = dict(model=profile.model, port=profile.port, device_id=profile.device_id,
+                address=profile.start_address if action == 'on' else profile.stop_address,
+                value=profile.start_value if action == 'on' else profile.stop_value)
+        results.append(row)
     return results

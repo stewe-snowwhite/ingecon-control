@@ -1,5 +1,6 @@
 """SQLite-only Telegram identity, command intents, audit and notification outbox."""
 import hashlib
+import logging
 import re
 import secrets
 import time
@@ -12,9 +13,11 @@ from commands import ControlBlocked, command_payload, execute_devices
 from models import (User, Inverter, StateEvent, TelegramLinkCode, TelegramLink,
                     TelegramCommand, CommandAudit, TelegramDelivery, TelegramUpdate, TelegramRate)
 from monitoring import current_statuses
+from telegram_control import TelegramControlPolicy
 
 CODE = re.compile(r'[A-Za-z0-9_-]{32}', re.ASCII)
 NOTIFY_STATES = {'Online':'online', 'Offline':'offline', 'Degraded':'degraded'}
+log = logging.getLogger('ingecon.telegram')
 
 
 class TelegramAccess(ValueError):
@@ -40,10 +43,20 @@ def reserve_rate(session, key, now, limit, window):
 
 
 class TelegramStore:
-    def __init__(self, engine, clock=time.time):
+    def __init__(self, engine, clock=time.time, control_policy=None):
         self.engine, self.clock = engine, clock
         self.sessions = sessionmaker(engine, expire_on_commit=False)
         self._fanout_after = 0
+        self.control_policy = control_policy or TelegramControlPolicy()
+
+    @property
+    def controls_enabled(self):
+        return self.control_policy.enabled
+
+    def control_payload(self, user, action, inverters):
+        payload = command_payload(user, action, 100, inverters)
+        payload['control_policy'] = self.control_policy.fingerprint
+        return payload
 
     def user(self, session, telegram_id):
         link = session.get(TelegramLink, telegram_id)
@@ -188,7 +201,7 @@ class TelegramStore:
             if user.role not in ('Administrator','Operator'):
                 raise TelegramAccess('Viewer не має права керувати.')
             inverters, group = self.targets(session,kind,target)
-            payload = command_payload(user,action,100,inverters)
+            payload = self.control_payload(user,action,inverters)
             # Keep an audit of previews, including those superseded without a click.
             old = select(TelegramCommand.id).where(TelegramCommand.telegram_id==telegram_id,
                                                  TelegramCommand.state=='awaiting')
@@ -214,29 +227,60 @@ class TelegramStore:
                     TelegramCommand.payload,TelegramCommand.group_name,TelegramCommand.expires_at)).first()
             if not row:
                 raise TelegramAccess('Підтвердження вже використано або недійсне.')
+            session.expire_all()
+            _, user = self.user(session, telegram_id)  # Recheck after the atomic write claim.
             payload = row.payload
             ids = [target[0] for target in payload['targets']]
             inverters = session.scalars(select(Inverter).where(Inverter.id.in_(ids)).order_by(Inverter.id)).all()
-            result, details = 'blocked', []
+            result, details = 'processing', []
             if row.expires_at <= now:
                 result = 'expired'
             elif cancel:
                 result = 'cancelled'
             elif (user.role not in ('Administrator','Operator') or
-                  command_payload(user,payload['action'],100,inverters)!=payload):
+                  self.control_payload(user,payload['action'],inverters)!=payload):
                 result = 'invalidated'
             elif row.group_name is not None and session.scalars(select(Inverter.id).where(
                     Inverter.group==row.group_name).order_by(Inverter.id)).all()!=ids:
                 result = 'invalidated'
             else:
                 try:
-                    execute_devices(user,payload['action'],inverters,source='telegram')
-                except ControlBlocked as error:
+                    # Preflight all targets before persisting the execution claim.
+                    self.control_policy.validate(inverters, payload['action'])
+                except ValueError as error:
+                    result = 'blocked'
                     details = [dict(id=inv.id,name=inv.name,outcome='blocked',message=str(error)) for inv in inverters]
             session.execute(update(TelegramCommand).where(TelegramCommand.id==intent).values(state=result))
             session.execute(update(CommandAudit).where(CommandAudit.request_id=='tg:'+intent)
                 .values(result=result,details=details,occurred_at=now))
+            # Detached immutable-in-practice request snapshots; no SQLite lock
+            # or checked-out connection is held during device operations.
+            if result == 'processing':
+                session.expunge(user)
+                for inverter in inverters:
+                    session.expunge(inverter)
+        if result != 'processing':
             return result, details
+        try:
+            details = execute_devices(user, payload['action'], inverters, source='telegram',
+                writes_enabled=self.controls_enabled, telegram_policy=self.control_policy)
+            count = sum(row['outcome'] == 'register_confirmed' for row in details)
+            result = 'confirmed' if count == len(details) else 'partial' if count else 'unconfirmed'
+        except ControlBlocked as error:
+            result = 'blocked'
+            details = [dict(id=inv.id,name=inv.name,outcome='blocked',message=str(error)) for inv in inverters]
+        except Exception as error:
+            # The write might have happened; never automatically retry this intent.
+            log.error('Control execution interrupted: %s', type(error).__name__)
+            result = 'unknown'
+            details = [dict(id=inv.id,name=inv.name,outcome='unknown',
+                message='Результат невідомий; автоматичного повторення немає.') for inv in inverters]
+        with self.sessions.begin() as session:
+            session.execute(update(TelegramCommand).where(TelegramCommand.id==intent,
+                TelegramCommand.state=='processing').values(state=result))
+            session.execute(update(CommandAudit).where(CommandAudit.request_id=='tg:'+intent)
+                .values(result=result,details=details,occurred_at=self.clock()))
+        return result, details
 
     def audit_rejected(self, telegram_id, callback_id):
         with self.sessions.begin() as session:
@@ -319,6 +363,11 @@ class TelegramStore:
 
     def recover(self):
         with self.sessions.begin() as session:
+            processing = select(TelegramCommand.id).where(TelegramCommand.state=='processing')
+            session.execute(update(CommandAudit).where(CommandAudit.request_id.in_(
+                select('tg:'+TelegramCommand.id).where(TelegramCommand.id.in_(processing))))
+                .values(result='unknown'))
+            session.execute(update(TelegramCommand).where(TelegramCommand.state=='processing').values(state='unknown'))
             session.execute(update(TelegramDelivery).where(TelegramDelivery.state=='sending')
                 .values(state='unknown',error='interrupted'))
 

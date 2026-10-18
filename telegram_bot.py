@@ -21,6 +21,7 @@ from device_safety import disable_device_transports
 from models import TELEGRAM_TABLES, db
 from operation_locks import resource_lock
 from telegram_store import TelegramStore
+from telegram_control import load_control_policy
 from telegram_ui import build_dispatcher, notification_loop
 
 BASE_TABLES = {'user','inverter','inverter_status','monitor_config','monitor_heartbeat','state_event'}
@@ -107,7 +108,8 @@ async def run_polling(store, token):
             raise ValueError('Webhook уже налаштовано; узгодьте його вимкнення перед polling.')
         await bot.set_my_commands([BotCommand(command=command,description=description) for command,description in (
             ('start','Меню та прив’язка'),('status','Поточні стани з SQLite'),('inverters','Інвертори'),
-            ('groups','Групи'),('history','Історія станів'),('help','Допомога'))])
+            ('groups','Групи'),('history','Історія станів'),('control','Start/Stop із підтвердженням'),
+            ('notifications','Налаштування сповіщень'),('help','Допомога'))])
         dispatcher = build_dispatcher(store)
         notifier = asyncio.create_task(notification_loop(store,bot))
         await dispatcher.start_polling(bot,polling_timeout=25,handle_as_tasks=False,
@@ -120,7 +122,7 @@ async def run_polling(store, token):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Telegram integration: SQLite only, controls blocked.')
+    parser = argparse.ArgumentParser(description='Telegram statuses from SQLite; controls require a verified per-device policy.')
     commands = parser.add_subparsers(dest='command',required=True)
     prepare = commands.add_parser('prepare-db',help='Explicit additive schema preparation with mandatory backup')
     prepare.add_argument('--database',required=True)
@@ -128,22 +130,30 @@ def main(argv=None):
     run = commands.add_parser('run',help='Real Telegram long polling; never runs inverter probes')
     run.add_argument('--database',required=True)
     run.add_argument('--token-file')
+    check = commands.add_parser('check-control-config', help='Offline validation: no DB, Telegram or device connections')
+    check.add_argument('--file', required=True)
     args = parser.parse_args(argv)
     engine = None
     try:
+        if args.command=='check-control-config':
+            policy = load_control_policy(args.file)
+            print('Конфігурація перевірена без мережі. Керування: '+
+                  ('увімкнено' if policy.enabled else 'вимкнено')+f'; пристроїв: {len(policy.targets)}.')
+            return
         if args.command=='prepare-db':
             prepare_database(args.database,args.backup)
             print('Резервну копію та додаткові таблиці Telegram створено. Наявні дані збережено.')
             return
         token = load_token(args.token_file)
+        policy = load_control_policy()  # Validate before any Telegram/device network access.
         logging.basicConfig(level=logging.WARNING,format='%(levelname)s %(name)s: %(message)s')
         for handler in logging.getLogger().handlers:
             handler.addFilter(TokenRedactor(token))
         engine = open_engine(args.database)
         check_schema(engine)  # No schema changes or Telegram API calls on an unprepared DB.
-        disable_device_transports()
+        disable_device_transports(allow_control=policy.enabled)
         with resource_lock('telegram-db:'+str(Path(args.database).resolve())), resource_lock('telegram-bot:'+token.split(':')[0]):
-            asyncio.run(run_polling(TelegramStore(engine),token))
+            asyncio.run(run_polling(TelegramStore(engine,control_policy=policy),token))
     except KeyboardInterrupt:
         pass
     except (ValueError,OSError,TelegramAPIError) as error:

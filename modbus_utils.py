@@ -32,7 +32,7 @@ def check_modbus_connection(ip_address, port=502, timeout=2):
             client.close()
 
 
-def _write_and_verify(ip, address, value, port, allow_write):
+def _write_and_verify(ip, address, value, port, allow_write, device_id=1):
     if allow_write is not True:
         return CommandResult(False, 'Modbus-записи заблоковано.')
     client = None
@@ -41,12 +41,12 @@ def _write_and_verify(ip, address, value, port, allow_write):
         client = ModbusTcpClient(host=ip, port=port, retries=0)
         if not client.connect():
             return CommandResult(False, 'Пристрій недоступний; запис не підтверджено.')
-        reply = client.write_register(address, value, device_id=1)
+        reply = client.write_register(address, value, device_id=device_id)
         if reply is None or reply.isError():
             return CommandResult(False, 'Пристрій не підтвердив запис.')
         if getattr(reply, 'address', None) != address or getattr(reply, 'registers', None) != [value]:
             return CommandResult(False, 'Відповідь запису не відповідає команді.')
-        readback = client.read_holding_registers(address, count=1, device_id=1)
+        readback = client.read_holding_registers(address, count=1, device_id=device_id)
         if readback is None or readback.isError() or readback.registers != [value]:
             return CommandResult(False, 'Значення регістра після запису не підтверджено.')
         return CommandResult(True, 'Підтверджено запис регістра; фізичний стан інвертора не підтверджено.')
@@ -56,6 +56,16 @@ def _write_and_verify(ip, address, value, port, allow_write):
     finally:
         if client is not None:
             client.close()
+
+
+@serialized_modbus(1, lambda: CommandResult(False, 'Modbus-операція вже виконується.'))
+def modbus_control(ip, port=502, *, address, value, device_id, allow_write=False):
+    """FC06 + FC03 readback for an explicitly verified, model-specific command."""
+    if any(type(number) is not int or not low <= number <= high for number, low, high in (
+        (address, 0, 65535), (value, 0, 65535), (device_id, 1, 255), (port, 1, 65535)
+    )):
+        return CommandResult(False, 'Некоректна карта команди; запис не виконувався.')
+    return _write_and_verify(ip, address, value, port, allow_write, device_id)
 
 
 @serialized_modbus(1, lambda: CommandResult(False, 'Modbus-операція вже виконується.'))

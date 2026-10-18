@@ -17,7 +17,8 @@ log = logging.getLogger('ingecon.telegram')
 HELP = ('Команди: /start, /status, /inverters, /groups, /history, /help.\n'
         '/notifications — налаштування сповіщень. /control — вибір цілей.\n'
         'Прив’язка: у вебпанелі Налаштування → Telegram → Створити код, потім /start КОД у приватному чаті.\n'
-        'Дані тільки з SQLite. Start/stop заблоковані до окремого дозволу; Modbus-записи не виконуються.')
+        'Статуси тільки з SQLite. Start/Stop — для Administrator/Operator після підтвердження '
+        'і явного дозволу для конкретного пристрою.')
 
 
 def clean(value):
@@ -33,12 +34,12 @@ def keyboard(rows):
         [InlineKeyboardButton(text=label,callback_data=data) for label,data in row] for row in rows])
 
 
-def menu(role):
+def menu(role, controls_enabled=False):
     rows = [[('Статус','menu:status'),('Інвертори','list:i:0')],
             [('Групи','list:g:0'),('Історія','menu:history')],
             [('Сповіщення','menu:notifications'),('Допомога','menu:help')]]
     if role in ('Administrator','Operator'):
-        rows.append([('Керування 🔒','menu:control')])
+        rows.append([('Керування' if controls_enabled else 'Керування 🔒','menu:control')])
     return keyboard(rows)
 
 
@@ -68,6 +69,10 @@ def build_dispatcher(store):
     dispatcher.update.outer_middleware(UpdateGate(store))
     router = Router()
     dispatcher.include_router(router)
+
+    def control_note():
+        return ('Start/Stop дозволені для налаштованих інверторів після підтвердження.'
+                if store.controls_enabled else 'Start/Stop заблоковані конфігурацією.')
 
     def listing(telegram_id, kind, page=0):
         rows, more = store.inventory(telegram_id,'g' if kind=='ng' else kind,page)
@@ -103,17 +108,17 @@ def build_dispatcher(store):
                       for state in ('Online','Offline','Degraded','Unknown')}
             text = f"Усього: {len(snapshot['inverters'])}\n"+' · '.join(f'{key}: {value}' for key,value in counts.items())
             text += '\nМонітор: '+('активний' if snapshot['monitor']['alive'] else 'зупинений або дані застарілі')
-            return text,menu(role)
+            return text,menu(role, store.controls_enabled)
         if section=='history':
             events = store.history(telegram_id)
             text = 'Останні події (UTC):'+('\nПодій немає.' if not events else '')
             for event_id,name,previous,state,occurred in events:
                 text += f'\n#{event_id} {clean(name)}: {previous} → {state}\n{utc(occurred)}'
-            return text,menu(role)
+            return text,menu(role, store.controls_enabled)
         if section=='control':
             if role=='Viewer':
                 raise TelegramAccess('Viewer не має права керувати.')
-            return 'Виберіть інвертор або групу. Усі start/stop заблоковані.',keyboard([
+            return 'Виберіть інвертор або групу. '+control_note(),keyboard([
                 [('Інвертор','list:i:0'),('Група','list:g:0')],[('Меню','menu:start')]])
         if section=='notifications':
             settings = store.preferences(telegram_id)
@@ -125,8 +130,8 @@ def build_dispatcher(store):
             buttons += [[('Вибрати групу','list:ng:0')],[('Меню','menu:start')]]
             return text,keyboard(buttons)
         if section=='help':
-            return HELP,menu(role)
-        return f'Прив’язано: {clean(username)} · {role}\nСтатуси лише з SQLite; керування заблоковано.',menu(role)
+            return HELP+'\n'+control_note(),menu(role, store.controls_enabled)
+        return f'Прив’язано: {clean(username)} · {role}\nСтатуси лише з SQLite. '+control_note(),menu(role, store.controls_enabled)
 
     async def message_handler(message, bot):
         telegram_id = message.from_user.id
@@ -167,20 +172,27 @@ def build_dispatcher(store):
                     text = '\n'.join(f'#{inv.id} {clean(inv.name)} · {clean(inv.ip_address)}' for inv in targets)
                 rows = [[('Меню','menu:start')]]
                 if role in ('Administrator','Operator'):
-                    rows.insert(0,[('Start 🔒',f'act:on:{parts[1]}:{parts[2]}'),('Stop 🔒',f'act:off:{parts[1]}:{parts[2]}')])
+                    suffix = '' if store.controls_enabled else ' 🔒'
+                    rows.insert(0,[('Start'+suffix,f'act:on:{parts[1]}:{parts[2]}'),('Stop'+suffix,f'act:off:{parts[1]}:{parts[2]}')])
                 markup = keyboard(rows)
             elif parts[0]=='act' and len(parts)==4:
                 intent,payload = store.prepare(telegram_id,parts[1],parts[2],int(parts[3]))
                 text = ('Підтвердьте '+('START' if parts[1]=='on' else 'STOP')+' для точного списку:\n'+
                     '\n'.join(f'#{row[0]} {clean(row[1])} · {clean(row[3])}' for row in payload['targets'])+
-                    '\nДійсне 120 секунд, одноразове. Записи заблоковані; виконання не буде.')
+                    '\nДійсне 120 секунд, одноразове. '+control_note()+
+                    (' Дозволені команди виконують реальний Modbus-запис.' if store.controls_enabled else ''))
                 markup = keyboard([[('Підтвердити',f'confirm:{intent}'),('Скасувати',f'cancel:{intent}')]])
             elif parts[0] in ('confirm','cancel') and len(parts)==2:
-                result,details = store.confirm(telegram_id,parts[1],cancel=parts[0]=='cancel')
+                # Bounded device I/O must not pause notification delivery.
+                result,details = await asyncio.to_thread(store.confirm, telegram_id, parts[1], cancel=parts[0]=='cancel')
                 labels = {'blocked':'Заблоковано. Modbus-запис не виконувався.', 'expired':'Підтвердження застаріло.',
-                          'cancelled':'Скасовано.', 'invalidated':'Права або цілі змінено. Підготуйте нове підтвердження.'}
-                text = labels[result]+'\n'+'\n'.join(f"#{row['id']} {clean(row['name'])}: заблоковано" for row in details)
-                markup = menu(role)
+                          'cancelled':'Скасовано.', 'invalidated':'Права, конфігурація або цілі змінено. Підготуйте нове підтвердження.',
+                          'confirmed':'Підтверджено записи регістрів; фізичний стан інверторів не підтверджено.',
+                          'partial':'Частину записів підтверджено; перевірте результати кожного інвертора.',
+                          'unconfirmed':'Записи не підтверджено. Автоматичного повторення немає.',
+                          'unknown':'Результат невідомий. Не повторюйте команду без перевірки стану.'}
+                text = labels[result]+'\n'+'\n'.join(f"#{row['id']} {clean(row['name'])}: {clean(row['message'])}" for row in details)
+                markup = menu(role, store.controls_enabled)
             elif parts[0]=='pref' and len(parts) in (2,3):
                 if parts[1]=='all' and len(parts)==2:
                     store.preferences(telegram_id,'group')
@@ -212,7 +224,7 @@ def build_dispatcher(store):
         if (isinstance(event.exception,SQLAlchemyError) and isinstance(message,Message) and
             message.chat.type=='private' and item.from_user and message.chat.id==item.from_user.id):
             try:
-                await send(bot,item.from_user.id,'База даних тимчасово недоступна. Повторіть запит пізніше; команди не виконуються.')
+                await send(bot,item.from_user.id,'База даних тимчасово недоступна. Результат команди може бути невідомим; не повторюйте її без перевірки стану.')
             except TelegramAPIError:
                 pass
         return True
