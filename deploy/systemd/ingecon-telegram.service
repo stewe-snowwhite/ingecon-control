@@ -29,6 +29,7 @@ ProtectControlGroups=yes
 CapabilityBoundingSet=
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 ReadWritePaths=/opt/ingecon-control/instance/production /opt/ingecon-control/instance/locks
+ReadWritePaths=-/opt/ingecon-control/instance/monitor-demo
 ReadOnlyPaths=/opt/ingecon-control/instance/telegram
 InaccessiblePaths=/opt/ingecon-control/instance/demo /opt/ingecon-control/instance/production/backups /opt/ingecon-control/instance/production/web-secret.key
 MemoryMax=384M

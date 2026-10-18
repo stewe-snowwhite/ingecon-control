@@ -20,6 +20,7 @@ from commands import block_reason, execute_devices
 from security import authenticate, load_user, log_failure, reserve_login_attempt, roles_required
 from telegram_web import telegram_web
 from configuration import cookie_secure_from_env, secret_from_env
+from demo_monitor_web import demo_monitor_web
 
 csrf = CSRFProtect()
 ALL_ROLES = ROLES
@@ -59,6 +60,9 @@ def create_app(config=None):
     app.before_request(load_user)
     csrf.init_app(app)
     app.register_blueprint(telegram_web)
+    app.config['MONITOR_DEMO_AVAILABLE'] = not app.config.get('DEMO_MODE',False)
+    if app.config['MONITOR_DEMO_AVAILABLE']:
+        app.register_blueprint(demo_monitor_web)
     app.jinja_env.filters['monitor_reason'] = explain_reason
     app.jinja_env.filters['utc_time'] = lambda value: (
         datetime.fromtimestamp(value, timezone.utc).strftime('%Y-%m-%d %H:%M:%S')

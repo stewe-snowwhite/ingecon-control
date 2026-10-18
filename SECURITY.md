@@ -212,3 +212,13 @@ CSRF, session rotation, відкликання доступу, cookie, rate limi
 - [Flask-WTF CSRFProtect](https://flask-wtf.readthedocs.io/en/1.2.x/csrf/).
 - [Werkzeug password hashing](https://werkzeug.palletsprojects.com/en/stable/utils/#werkzeug.security.generate_password_hash).
 - [Flask security considerations](https://flask.palletsprojects.com/en/stable/web-security/).
+
+## Ізольований симулятор TASK-08
+
+Розділ `/demo` та `/api/demo/status` доступні тільки Administrator, POST має CSRF.
+Його SQLite і metadata окремі від production та TASK-05. Симулятор дозволяє
+тільки FC03 по 127.0.0.1:15020; write-функції відхиляються, інші адреси блокуються
+audit guard окремих demo-процесів. Вебзапити не виконують Modbus-опитування.
+Сповіщення `[DEMO]` потребують особистого ввімкнення, спливають через годину та
+повторно перевіряють роль/версію/Telegram-прив’язку. Вони не змінюють production
+курсорів, історії або налаштувань. Докладно: [TASK08_DEMO.md](TASK08_DEMO.md).

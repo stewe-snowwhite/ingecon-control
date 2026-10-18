@@ -22,6 +22,7 @@ from models import TELEGRAM_TABLES, db
 from operation_locks import resource_lock
 from telegram_store import TelegramStore
 from telegram_ui import build_dispatcher, notification_loop
+from demo_notifications import DemoNotificationBridge
 
 BASE_TABLES = {'user','inverter','inverter_status','monitor_config','monitor_heartbeat','state_event'}
 
@@ -100,6 +101,7 @@ async def run_polling(store, token):
     session = AiohttpSession(timeout=35,limit=2)
     bot = Bot(token,session=session)
     notifier = None
+    demo_notifications = DemoNotificationBridge(store.engine)
     try:
         # Do not silently remove another deployment's webhook or pending updates.
         webhook = await bot.get_webhook_info()
@@ -109,7 +111,7 @@ async def run_polling(store, token):
             ('start','Меню та прив’язка'),('status','Поточні стани з SQLite'),('inverters','Інвертори'),
             ('groups','Групи'),('history','Історія станів'),('help','Допомога'))])
         dispatcher = build_dispatcher(store)
-        notifier = asyncio.create_task(notification_loop(store,bot))
+        notifier = asyncio.create_task(notification_loop(store,bot,demo_notifications))
         await dispatcher.start_polling(bot,polling_timeout=25,handle_as_tasks=False,
             allowed_updates=['message','callback_query'],close_bot_session=False)
     finally:
@@ -117,6 +119,7 @@ async def run_polling(store, token):
             notifier.cancel()
             await asyncio.gather(notifier,return_exceptions=True)
         await bot.session.close()
+        demo_notifications.close()
 
 
 def main(argv=None):

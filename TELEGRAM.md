@@ -302,3 +302,11 @@ xfailed і попереджень pytest немає. **17 JS-тестів про
 - [aiogram BaseSession](https://docs.aiogram.dev/en/latest/api/session/base.html).
 - [Telegram Bot API](https://core.telegram.org/bots/api#making-requests).
 - [aiogram 3.31.0 та Python 3.13 на PyPI](https://pypi.org/project/aiogram/3.31.0/).
+
+## Тестові сповіщення TASK-08
+
+Окремий адміністраторський розділ «Демо» може ввімкнути власні `[DEMO]`-сповіщення
+на одну годину. За замовчуванням вони вимкнені. Використовується наявний bot і
+окрема demo-черга, без другого polling та змін production-налаштувань сповіщень.
+Запуск, ізоляція, підтвердження й перевірка: [TASK08_DEMO.md](TASK08_DEMO.md).
+Для завантаження нового коду у вже працюючий бот потрібен погоджений перезапуск.
