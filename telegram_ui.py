@@ -233,8 +233,6 @@ async def notification_batch(store, bot):
         seen.add(telegram_id)  # At most one message per recipient in this 5-second batch.
         event_id,name,previous,state,occurred = event
         text = f'Подія #{event_id}: {clean(name)}\n{previous} → {state}\n{utc(occurred)}\nДжерело: журнал станів SQLite.'
-        if hasattr(store,'notification_text'):
-            text = store.notification_text(event)
         try:
             reply = await send(bot,telegram_id,text)
         except TelegramRetryAfter as error:
@@ -256,7 +254,7 @@ async def notification_batch(store, bot):
             store.finish_delivery(delivery_id,'sent',message_id=reply.message_id)
 
 
-async def notification_loop(store, bot, demo_notifications=None):
+async def notification_loop(store, bot):
     store.recover()
     cleaned = 0
     while True:
@@ -265,8 +263,6 @@ async def notification_loop(store, bot, demo_notifications=None):
                 store.cleanup()
                 cleaned = store.clock()
             await notification_batch(store,bot)
-            if demo_notifications:
-                await demo_notifications.deliver(bot)
         except TelegramUnauthorizedError:
             log.error('Telegram token rejected; notifications stopped.')
             return

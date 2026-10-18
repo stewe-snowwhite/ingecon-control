@@ -30,7 +30,7 @@ def http_portal(tmp_path, monkeypatch):
         user = User(username='stewe', role='Administrator')
         user.set_password('synthetic-http-password')
         session.add(user)
-        session.add(Inverter(name='Mock only', group='Demo', ip_address='192.0.2.1'))
+        session.add(Inverter(name='Mock only', group='Mock', ip_address='192.0.2.1'))
     engine.dispose()
     key = tmp_path/'secret.key'
     private_write(key, 'synthetic-test-key-never-production-'*2)
@@ -227,4 +227,5 @@ def test_deployment_config_scope_and_single_bot():
     for unit in (web,bot):
         assert 'WantedBy=multi-user.target' in unit and 'User=codex' in unit
         assert 'UMask=0077' in unit and 'ProtectSystem=strict' in unit
-        assert 'instance/demo' in unit
+        assert 'instance/monitor-demo' not in unit and 'instance/demo' not in unit
+        assert 'ReadWritePaths=/opt/ingecon-control/instance/production /opt/ingecon-control/instance/locks' in unit

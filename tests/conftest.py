@@ -30,12 +30,6 @@ def isolation(monkeypatch, tmp_path):
     monkeypatch.setattr(pymodbus.client, 'ModbusTcpClient', FakeModbusTcpClient)
     import modbus_utils
     monkeypatch.setattr(modbus_utils, 'ModbusTcpClient', FakeModbusTcpClient)
-    # Neither legacy bot tests nor generic Flask tests may discover real TASK-08
-    # runtime files, even after the operator explicitly initializes the feature.
-    import demo_notifications
-    import demo_monitor_web
-    monkeypatch.setattr(demo_notifications, 'DIRECTORY', tmp_path / 'monitor-demo')
-    monkeypatch.setattr(demo_monitor_web, 'DIRECTORY', tmp_path / 'monitor-demo')
 
 @pytest.fixture
 def modbus(isolation, monkeypatch):

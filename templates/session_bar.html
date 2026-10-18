@@ -2,7 +2,6 @@
 <a href="{{ url_for('index') }}" {% if request.endpoint == 'index' %}aria-current="page"{% endif %}>Огляд</a>
 <a href="{{ url_for('history') }}" {% if request.endpoint == 'history' %}aria-current="page"{% endif %}>Історія</a>
 <a href="{{ url_for('telegram_web.settings') }}" {% if request.endpoint == 'telegram_web.settings' %}aria-current="page"{% endif %}>Telegram</a>
-{% if g.user.role == 'Administrator' and config.MONITOR_DEMO_AVAILABLE %}<a href="{{ url_for('demo_monitor_web.page') }}" {% if request.blueprint == 'demo_monitor_web' %}aria-current="page"{% endif %}>Демо</a>{% endif %}
 {% if g.user.role == 'Administrator' %}<a href="{{ url_for('add_inverter') }}">Додати інвертор</a>{% endif %}</nav>
 <div class="account"><span>{{ g.user.username }} <small>{{ g.user.role }}</small></span>
 <form method="POST" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="button subtle">Вийти</button></form></div>

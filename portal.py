@@ -12,7 +12,7 @@ from werkzeug.wsgi import get_host
 from werkzeug.exceptions import SecurityError
 
 from app import create_app
-from demo_safety import disable_device_transports
+from device_safety import disable_device_transports
 from models import db
 from portal_hosts import current_hosts
 

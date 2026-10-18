@@ -23,8 +23,7 @@ log = logging.getLogger(__name__)
 
 class MonitorWorker:
     def __init__(self, engine, probes=None, interval=30, stop_event=None,
-                 clock=time.time, monotonic=time.monotonic, target_factory=target_for,
-                 observation_handler=None):
+                 clock=time.time, monotonic=time.monotonic):
         if not math.isfinite(interval) or not 1 <= interval <= 86400:
             raise ValueError('Interval must be 1–86400 seconds')
         self.engine = engine
@@ -36,8 +35,6 @@ class MonitorWorker:
         self.owner = uuid.uuid4().hex
         self.started_at = clock()
         self._has_started = False
-        self.target_factory = target_factory
-        self.observation_handler = observation_handler
 
     def _flush(self, observations, *, duration=None, error=None, stopped=False):
         # Network work is done before entering this short write transaction.
@@ -47,11 +44,9 @@ class MonitorWorker:
                 if inv is None:
                     continue
                 config = session.get(MonitorConfig, inv.id)
-                if self.target_factory(inv, config).key != observation.target.key:
+                if target_for(inv, config).key != observation.target.key:
                     continue  # Target edited while a network request was in flight.
-                status = apply_observation(session, inv, observation, self.interval*3)
-                if self.observation_handler:
-                    self.observation_handler(session, inv, observation, status)
+                apply_observation(session, inv, observation, self.interval*3)
                 if config and config.requested_at is not None and config.requested_at <= observation.checked_at:
                     config.requested_at = None
             heartbeat = session.get(MonitorHeartbeat, 1)
@@ -73,7 +68,7 @@ class MonitorWorker:
         start = self.monotonic()
         # Release the read transaction before network probes.
         with Session(self.engine) as session:
-            targets = [self.target_factory(inv, config) for inv, config in session.execute(
+            targets = [target_for(inv, config) for inv, config in session.execute(
                 select(Inverter, MonitorConfig).outerjoin(MonitorConfig, Inverter.id == MonitorConfig.inverter_id)
                 .order_by(Inverter.id))]
         if not self._has_started:
@@ -129,7 +124,7 @@ class MonitorWorker:
     def _check_schema(self):
         existing = set(inspect(self.engine).get_table_names())
         if 'demo_metadata' in existing:
-            raise RuntimeError('Demo database: real monitoring is forbidden.')
+            raise RuntimeError('Archived test database: real monitoring is forbidden.')
         required = {'inverter', 'monitor_config', 'inverter_status', 'state_event', 'monitor_heartbeat'}
         if not required <= existing:
             raise RuntimeError('Monitoring schema missing; back up the DB and initialize it explicitly.')

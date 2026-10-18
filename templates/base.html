@@ -12,7 +12,6 @@
 {% if g.user %}{% include 'session_bar.html' %}{% endif %}
 <button type="button" id="theme-toggle" class="button subtle" aria-label="Перемкнути тему">Тема</button></header>
 <main id="main" class="workspace"><div id="page-alert" class="notice danger" role="alert" hidden></div>
-{% if config.DEMO_MODE %}<p class="notice warning" role="status">ДЕМО · Вигадані дані та імітований heartbeat. Реальні ICMP/TCP/Modbus-перевірки й усі Modbus-записи вимкнені.</p>{% endif %}
 {% with messages = get_flashed_messages(with_categories=true) %}{% for category, message in messages %}<p class="notice {{ 'danger' if category in ('danger', 'error') else 'info' }}" role="status">{{ message }}</p>{% endfor %}{% endwith %}
 {% block content %}{% endblock %}</main><footer class="footer">ingecon-control <span>Моніторинг інверторів</span></footer>
 </body></html>

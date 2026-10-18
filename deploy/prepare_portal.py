@@ -1,7 +1,7 @@
 """Back up the existing DB and create private portal configuration, never deploy.
 
 Run from the repo: .venv/bin/python -m deploy.prepare_portal
-Does not stop processes, migrate a DB, or touch /etc, tokens or demo files.
+Does not stop processes, migrate a DB, or touch /etc, tokens or unrelated runtime files.
 """
 import os
 import secrets
@@ -62,7 +62,7 @@ def main():
     print('Verified backup:', backup)
     print('Persistent private key (value hidden):', key)
     print('Private environment file:', env)
-    print('No database rows, services, network rules, Telegram token or demo data were changed.')
+    print('No database rows, services, network rules, Telegram token or unrelated runtime data were changed.')
 
 
 if __name__ == '__main__':

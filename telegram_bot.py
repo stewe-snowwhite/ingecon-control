@@ -17,12 +17,11 @@ from aiogram.utils.token import TokenValidationError, validate_token
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.engine import URL
 
-from demo_safety import disable_device_transports
+from device_safety import disable_device_transports
 from models import TELEGRAM_TABLES, db
 from operation_locks import resource_lock
 from telegram_store import TelegramStore
 from telegram_ui import build_dispatcher, notification_loop
-from demo_notifications import DemoNotificationBridge
 
 BASE_TABLES = {'user','inverter','inverter_status','monitor_config','monitor_heartbeat','state_event'}
 
@@ -72,7 +71,7 @@ def check_schema(engine):
     tables = set(inspect(engine).get_table_names())
     required = {table.name for table in TELEGRAM_TABLES} | BASE_TABLES
     if 'demo_metadata' in tables:
-        raise ValueError('Реальний Telegram polling для демо-БД заборонений. Демо залишається без вихідної мережі.')
+        raise ValueError('Архівна тестова БД не може використовуватись для production polling.')
     if not required<=tables:
         raise ValueError('Схема Telegram відсутня. Потрібні погоджена резервна копія та явний prepare-db.')
 
@@ -101,7 +100,6 @@ async def run_polling(store, token):
     session = AiohttpSession(timeout=35,limit=2)
     bot = Bot(token,session=session)
     notifier = None
-    demo_notifications = DemoNotificationBridge(store.engine)
     try:
         # Do not silently remove another deployment's webhook or pending updates.
         webhook = await bot.get_webhook_info()
@@ -111,7 +109,7 @@ async def run_polling(store, token):
             ('start','Меню та прив’язка'),('status','Поточні стани з SQLite'),('inverters','Інвертори'),
             ('groups','Групи'),('history','Історія станів'),('help','Допомога'))])
         dispatcher = build_dispatcher(store)
-        notifier = asyncio.create_task(notification_loop(store,bot,demo_notifications))
+        notifier = asyncio.create_task(notification_loop(store,bot))
         await dispatcher.start_polling(bot,polling_timeout=25,handle_as_tasks=False,
             allowed_updates=['message','callback_query'],close_bot_session=False)
     finally:
@@ -119,7 +117,6 @@ async def run_polling(store, token):
             notifier.cancel()
             await asyncio.gather(notifier,return_exceptions=True)
         await bot.session.close()
-        demo_notifications.close()
 
 
 def main(argv=None):

@@ -20,12 +20,9 @@ TASK-06: [Telegram-прив’язка та політика безпеки](TEL
 у спільному `commands.py`; токен не є способом увімкнення керування.
 Production-міграцій, запитів до Telegram та інверторів під час реалізації не було.
 
-TASK-05 додає окремий HTTP-деморежим: [DEMO.md](DEMO.md). Він використовує
-власні SQLite, секрет і cookie `ingecon_demo`; Secure вимкнено лише в цьому
-режимі для локального HTTP. Production-конфігурація Secure/HTTPS збережена.
-Реальні мережеві операції блокуються у процесі `demo.py`, а всі Modbus-записи
-додатково відхиляються за DEMO_MODE незалежно від прапорця дозволу записів.
-Демо не копіює production-акаунти або секрети; звичайний монітор відхиляє демо-БД.
+Production-веб і Telegram блокують пристроєві транспорти через `device_safety.py`.
+Мережеві перевірки належать окремому монітору; Modbus-записи залишаються заблокованими.
+Автоматичні тести використовують mock та окремі синтетичні SQLite.
 
 ## Реалізовані правила
 
@@ -212,13 +209,3 @@ CSRF, session rotation, відкликання доступу, cookie, rate limi
 - [Flask-WTF CSRFProtect](https://flask-wtf.readthedocs.io/en/1.2.x/csrf/).
 - [Werkzeug password hashing](https://werkzeug.palletsprojects.com/en/stable/utils/#werkzeug.security.generate_password_hash).
 - [Flask security considerations](https://flask.palletsprojects.com/en/stable/web-security/).
-
-## Ізольований симулятор TASK-08
-
-Розділ `/demo` та `/api/demo/status` доступні тільки Administrator, POST має CSRF.
-Його SQLite і metadata окремі від production та TASK-05. Симулятор дозволяє
-тільки FC03 по 127.0.0.1:15020; write-функції відхиляються, інші адреси блокуються
-audit guard окремих demo-процесів. Вебзапити не виконують Modbus-опитування.
-Сповіщення `[DEMO]` потребують особистого ввімкнення, спливають через годину та
-повторно перевіряють роль/версію/Telegram-прив’язку. Вони не змінюють production
-курсорів, історії або налаштувань. Докладно: [TASK08_DEMO.md](TASK08_DEMO.md).

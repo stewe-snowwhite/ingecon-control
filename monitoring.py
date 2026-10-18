@@ -77,14 +77,12 @@ class Observation:
 
 class NetworkProbes:
     """Independent, bounded probes; FC03 only. No Modbus write API is used."""
-    def __init__(self, timeout=2, runner=None, clock=time.monotonic, client_factory=None, connector=None):
+    def __init__(self, timeout=2, runner=None, clock=time.monotonic):
         if not math.isfinite(timeout) or not 0.1 <= timeout <= 10:
             raise ValueError('Probe timeout must be 0.1–10 seconds')
         self.timeout = timeout
         self.runner = runner or subprocess.run
         self.clock = clock
-        self.client_factory = client_factory
-        self.connector = connector
 
     def elapsed(self, start):
         return round((self.clock()-start)*1000, 3)
@@ -114,7 +112,7 @@ class NetworkProbes:
         start = self.clock()
         try:
             with resource_lock(endpoint_key(target.host, target.port)):
-                with (self.connector or socket.create_connection)((target.host, target.port), timeout=self.timeout):
+                with socket.create_connection((target.host, target.port), timeout=self.timeout):
                     return ProbeResult(True, self.elapsed(start))
         except OperationBusy:
             return ProbeResult(None, error='tcp_busy')
@@ -131,8 +129,8 @@ class NetworkProbes:
         try:
             with resource_lock(endpoint_key(target.host, target.port)):
                 try:
-                    client = (self.client_factory or modbus_utils.ModbusTcpClient)(
-                        host=target.host, port=target.port, timeout=self.timeout, retries=0)
+                    client = modbus_utils.ModbusTcpClient(host=target.host, port=target.port,
+                                                         timeout=self.timeout, retries=0)
                     if not client.connect():
                         return ProbeResult(False, self.elapsed(start), 'modbus_unreachable')
                     reply = client.read_holding_registers(target.read_address,

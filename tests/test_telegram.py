@@ -510,7 +510,7 @@ def test_polling_wiring_mock_api_and_graceful_close(tg,monkeypatch):
 def test_schema_missing_and_demo_database_fail_before_polling(tg):
     with tg.engine.begin() as connection:
         connection.exec_driver_sql('CREATE TABLE demo_metadata (key TEXT, value TEXT)')
-    with pytest.raises(ValueError,match='демо-БД'): check_schema(tg.engine)
+    with pytest.raises(ValueError,match='Архівна тестова БД'): check_schema(tg.engine)
     with tg.engine.begin() as connection:
         connection.exec_driver_sql('DROP TABLE demo_metadata')
         TelegramLinkCode.__table__.drop(connection)

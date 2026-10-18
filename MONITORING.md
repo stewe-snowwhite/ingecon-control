@@ -314,12 +314,3 @@ Linux fork та OS pipe, без мережі; файли БД і lock-катал
 для всього проєкту, без xfailed і попереджень pytest. `pip check` не виявив
 порушених залежностей, `git diff --check` пройшов. Додаткова перевірка
 збереження запису `login_throttle` після доповнення схеми також пройшла.
-
-## Перевірка механізму на симуляторі TASK-08
-
-[TASK08_DEMO.md](TASK08_DEMO.md) описує окремий loopback simulator і demo-worker.
-Вони повторно використовують NetworkProbes, MonitorWorker та state machine,
-але мають окремі SQLite, heartbeat, події й власний тестовий профіль регістрів.
-Звичайний монітор відхиляє demo-БД; production-профілі не отримали дозволу на
-loopback чи нових припущень про регістри Ingeteam. Типовий production-інтервал
-залишився 30 секунд; типовий demo-інтервал — 5 секунд.
