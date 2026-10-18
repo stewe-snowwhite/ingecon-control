@@ -1,0 +1,37 @@
+[Unit]
+Description=ingecon-control internal Flask portal
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=codex
+Group=codex
+WorkingDirectory=/opt/ingecon-control
+EnvironmentFile=/opt/ingecon-control/instance/production/portal.env
+UnsetEnvironment=GUNICORN_CMD_ARGS GUNICORN_FD FLASK_DEBUG INGECON_SECRET_KEY INGECON_TELEGRAM_TOKEN
+ExecStart=/opt/ingecon-control/.venv/bin/gunicorn --config /opt/ingecon-control/deploy/gunicorn.conf.py portal_wsgi:app
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=40
+RuntimeDirectory=ingecon-web
+RuntimeDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/opt/ingecon-control/instance/production /opt/ingecon-control/instance/locks
+ReadOnlyPaths=/opt/ingecon-control/instance/production/web-secret.key /opt/ingecon-control/instance/production/portal.env
+InaccessiblePaths=/opt/ingecon-control/instance/demo /opt/ingecon-control/instance/telegram /opt/ingecon-control/instance/production/backups
+MemoryMax=256M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

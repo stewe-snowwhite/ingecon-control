@@ -1,5 +1,12 @@
 # TASK-02: авторизація та захист
 
+Внутрішній HTTP-режим описано в [HTTP_PORTAL.md](HTTP_PORTAL.md).
+`INGECON_COOKIE_SECURE` за замовчуванням true; для погодженого LAN HTTP потрібне
+явне false. HttpOnly, SameSite=Lax, CSRF, авторизація та ролі збережені.
+`INGECON_SECRET_KEY_FILE` дозволяє постійний приватний ключ без значення в unit/Git;
+разом із `INGECON_SECRET_KEY` він не приймається. Шаблони системної конфігурації
+ще не означають активний firewall чи запущені systemd-служби.
+
 TASK-06: [Telegram-прив’язка та політика безпеки](TELEGRAM.md). Коди одноразові,
 5 хвилин, у SQLite лише SHA-256; вебформи захищені CSRF. Доступ — лише приватний
 чат із числовим Telegram ID, актуальними роллю, активністю й session_version.

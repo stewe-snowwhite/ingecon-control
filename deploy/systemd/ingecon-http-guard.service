@@ -1,0 +1,14 @@
+[Unit]
+Description=Restrict ingecon HTTP to the local IPv4 network
+After=nftables.service
+Before=nginx.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/ingecon-control/http-guard.nft
+ExecReload=/usr/sbin/nft -f /etc/ingecon-control/http-guard.nft
+# No ExecStop: stopping a unit must not silently remove network protection.
+
+[Install]
+WantedBy=multi-user.target

@@ -19,6 +19,7 @@ from monitoring import current_statuses, Target, explain_reason
 from commands import block_reason, execute_devices
 from security import authenticate, load_user, log_failure, reserve_login_attempt, roles_required
 from telegram_web import telegram_web
+from configuration import cookie_secure_from_env, secret_from_env
 
 csrf = CSRFProtect()
 ALL_ROLES = ROLES
@@ -29,11 +30,12 @@ USERNAME = re.compile(r'[a-z0-9_.-]{1,64}', re.ASCII)
 def create_app(config=None):
     app = Flask(__name__)
     app.config.from_mapping(
-        SECRET_KEY=os.environ.get('INGECON_SECRET_KEY'),
+        SECRET_KEY=config['SECRET_KEY'] if config and 'SECRET_KEY' in config else secret_from_env(),
         SQLALCHEMY_DATABASE_URI=os.environ.get('INGECON_DATABASE_URI', 'sqlite:///database.db'),
         DEBUG=False,
         SESSION_COOKIE_HTTPONLY=True,
-        SESSION_COOKIE_SECURE=True,
+        SESSION_COOKIE_SECURE=(config['SESSION_COOKIE_SECURE'] if config and 'SESSION_COOKIE_SECURE' in config
+                               else cookie_secure_from_env()),
         SESSION_COOKIE_SAMESITE='Lax',
         PERMANENT_SESSION_LIFETIME=timedelta(minutes=30),
         SESSION_REFRESH_EACH_REQUEST=False,
@@ -47,6 +49,8 @@ def create_app(config=None):
     )
     if config:
         app.config.update(config)
+    if type(app.config['SESSION_COOKIE_SECURE']) is not bool:
+        raise RuntimeError('SESSION_COOKIE_SECURE must be a boolean.')
     if not isinstance(app.config['SECRET_KEY'], str) or len(app.config['SECRET_KEY']) < 32:
         raise RuntimeError('Set INGECON_SECRET_KEY to a random secret of at least 32 characters.')
     if app.debug or get_debug_flag():

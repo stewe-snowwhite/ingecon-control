@@ -1,0 +1,38 @@
+[Unit]
+Description=ingecon-control Telegram long polling (single instance)
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=codex
+Group=codex
+WorkingDirectory=/opt/ingecon-control
+Environment=INGECON_LOCK_DIR=/opt/ingecon-control/instance/locks
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+UnsetEnvironment=INGECON_TELEGRAM_TOKEN INGECON_SECRET_KEY INGECON_SECRET_KEY_FILE FLASK_DEBUG
+ExecStart=/opt/ingecon-control/.venv/bin/python /opt/ingecon-control/telegram_bot.py run --database /opt/ingecon-control/instance/production/ingecon.sqlite --token-file /opt/ingecon-control/instance/telegram/bot.key
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=40
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/opt/ingecon-control/instance/production /opt/ingecon-control/instance/locks
+ReadOnlyPaths=/opt/ingecon-control/instance/telegram
+InaccessiblePaths=/opt/ingecon-control/instance/demo /opt/ingecon-control/instance/production/backups /opt/ingecon-control/instance/production/web-secret.key
+MemoryMax=384M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

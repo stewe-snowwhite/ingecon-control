@@ -23,6 +23,8 @@ def isolation(monkeypatch, tmp_path):
     monkeypatch.setattr(logging, 'basicConfig', lambda **kwargs: None)
     monkeypatch.setenv('INGECON_DATABASE_URI', 'sqlite:///:memory:')
     monkeypatch.setenv('INGECON_SECRET_KEY', 'test-only-random-looking-key-32-chars')
+    monkeypatch.delenv('INGECON_SECRET_KEY_FILE', raising=False)
+    monkeypatch.delenv('INGECON_COOKIE_SECURE', raising=False)
     monkeypatch.chdir(tmp_path)
     import pymodbus.client
     monkeypatch.setattr(pymodbus.client, 'ModbusTcpClient', FakeModbusTcpClient)

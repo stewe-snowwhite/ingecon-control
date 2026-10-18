@@ -3,3 +3,4 @@ Flask-SQLAlchemy==3.1.1
 pymodbus==3.16.1
 Flask-WTF==1.2.2
 aiogram==3.31.0
+gunicorn==26.2.0

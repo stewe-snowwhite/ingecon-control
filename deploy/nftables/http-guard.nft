@@ -1,0 +1,11 @@
+# Atomic replacement of this application's table ONLY. No global flush ruleset.
+# destroy is idempotent and supported by Debian 13 nftables 1.1.3.
+destroy table inet ingecon_http_portal
+table inet ingecon_http_portal {
+    chain input {
+        type filter hook input priority -10; policy accept;
+        iifname "lo" tcp dport 80 accept
+        iifname "enp1s0" ip saddr 192.168.10.0/24 tcp dport 80 accept
+        tcp dport 80 counter drop
+    }
+}
