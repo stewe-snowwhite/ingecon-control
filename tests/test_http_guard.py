@@ -227,3 +227,121 @@ def test_post_activation_http_probe_only_reads_and_rejects_missing_csrf(monkeypa
     check_portal.http_check('http://127.0.0.1:5000')
     assert len(requests) == 3 and all('/control' not in r.full_url for r in requests)
     assert requests[-1].data == b'username=invalid-probe'
+    assert all(request.host == '127.0.0.1:5000' for request in requests)
+    assert all(not request.has_header('Host') for request in requests)
+
+
+@pytest.fixture
+def health_checks(monkeypatch):
+    calls = []
+    network = {'addresses':[nic()], 'routes':[route()], 'vpn_active':False}
+    monkeypatch.setattr(check_portal,'service_check',lambda name:calls.append(('service',name)))
+    monkeypatch.setattr(check_portal,'inventory',lambda:(network['addresses'],network['routes']))
+    monkeypatch.setattr(check_portal,'discover',lambda *args:guard.discover(*args,physical=lambda _:True))
+    monkeypatch.setattr(check_portal,'http_check',lambda base:calls.append(('http',base)))
+    monkeypatch.setattr(check_portal,'telegram_check',lambda:calls.append(('telegram',)))
+    def service_state(args,**kwargs):
+        assert args == ['systemctl','is-active','tailscaled']
+        return SimpleNamespace(returncode=0 if network['vpn_active'] else 3)
+    monkeypatch.setattr(check_portal.subprocess,'run',service_state)
+    return calls, network
+
+
+def test_local_http_and_telegram_pass_without_tailscale(health_checks,capsys):
+    calls,_ = health_checks
+    check_portal.main([])
+    assert ('http','http://10.42.0.2') in calls and ('telegram',) in calls
+    assert ('service','tailscaled') not in calls
+    assert 'Optional Tailscale unavailable' in capsys.readouterr().out
+
+
+def test_health_checks_follow_dhcp_change_without_dns_or_restart(health_checks):
+    calls, network = health_checks
+    check_portal.main([])
+    assert ('http','http://10.42.0.2') in calls
+    calls.clear()
+    network['addresses'] = [nic(address='172.20.5.10')]
+    network['routes'] = [route(subnet='172.20.5.0/24',address='172.20.5.10')]
+    check_portal.main([])
+    assert ('http','http://172.20.5.10') in calls
+    assert ('http','http://10.42.0.2') not in calls
+
+
+def test_optional_tailscale_checked_in_addition_to_primary_lan(health_checks):
+    calls,network = health_checks
+    network['vpn_active'] = True
+    network['addresses'].append(dict(ifname='tailscale0',flags=['UP'],addr_info=[
+        dict(family='inet',local='100.90.1.2',scope='global'),
+        dict(family='inet6',local='fd7a:115c:a1e0::123',scope='global')]))
+    check_portal.main([])
+    assert ('http','http://10.42.0.2') in calls
+    assert ('http','http://100.90.1.2') in calls
+    assert ('http','http://[fd7a:115c:a1e0::123]') in calls
+    assert ('telegram',) in calls
+
+
+def test_failed_optional_vpn_does_not_skip_primary_lan_or_telegram(health_checks):
+    calls,network = health_checks
+    network['vpn_active'] = True  # A broken running VPN must still be reported.
+    with pytest.raises(RuntimeError,match='Optional Tailscale'):
+        check_portal.main([])
+    assert ('http','http://10.42.0.2') in calls and ('telegram',) in calls
+
+
+@pytest.mark.parametrize('explicit_fallback',[False,True])
+def test_unsafe_or_missing_lan_is_reported_without_widening_rules(health_checks,explicit_fallback):
+    calls,network = health_checks
+    network['addresses'],network['routes'] = [],[]
+    if explicit_fallback:
+        check_portal.main(['--allow-no-lan'])
+    else:
+        with pytest.raises(RuntimeError,match='LAN discovery'):
+            check_portal.main([])
+    assert ('telegram',) in calls
+    assert [entry for entry in calls if entry[0]=='http'] == [
+        ('http','http://127.0.0.1:5000'),('http','http://127.0.0.1:80')]
+
+
+def test_telegram_error_is_redacted_and_other_channels_checked(health_checks,monkeypatch,capsys):
+    calls,_ = health_checks
+    def error():
+        raise RuntimeError('SECRET-TOKEN-in-URL')
+    monkeypatch.setattr(check_portal,'telegram_check',error)
+    with pytest.raises(RuntimeError,match='Telegram') as captured:
+        check_portal.main([])
+    output = capsys.readouterr().out
+    assert 'SECRET-TOKEN' not in output+str(captured.value)
+    assert 'Optional Tailscale unavailable' in output
+    assert ('http','http://10.42.0.2') in calls
+
+
+def test_deployment_has_no_tailscale_dependency_for_lan_or_telegram():
+    for path in (ROOT/'deploy/systemd').rglob('*.service'):
+        lines = path.read_text().splitlines()
+        for line in lines:
+            if line.startswith(('Requires=','BindsTo=','After=','Wants=')):
+                assert 'tailscaled' not in line
+    script = (ROOT/'deploy/activate_portal.sh').read_text()
+    assert '\nsystemctl is-active --quiet tailscaled.service\n' not in script
+    assert 'if [[ "$tailscale_active_before" == active ]]; then systemctl is-active --quiet tailscaled.service; fi' in script
+
+
+def test_primary_lan_render_refuses_unsafe_network_before_any_rule_change(monkeypatch,tmp_path,capsys):
+    monkeypatch.setattr(guard,'inventory',lambda:([],[]))
+    template = tmp_path/'rules.nft'
+    template.write_text('# LAN_ELEMENTS')
+    monkeypatch.setattr(guard.sys,'argv',['http_guard.py','--render','--require-lan','--template',str(template)])
+    with pytest.raises(SystemExit) as error:
+        guard.main()
+    assert error.value.code == 2
+    assert 'No safely determined LAN; no rules applied' in capsys.readouterr().err
+
+
+def test_explicit_no_lan_render_preserves_safe_fallback(monkeypatch,tmp_path,capsys):
+    monkeypatch.setattr(guard,'inventory',lambda:([nic()],[route()]))
+    monkeypatch.setenv('INGECON_HTTP_LAN','false')
+    template = tmp_path/'rules.nft'
+    template.write_text('set lan { # LAN_ELEMENTS }')
+    monkeypatch.setattr(guard.sys,'argv',['http_guard.py','--render','--template',str(template)])
+    guard.main()
+    assert capsys.readouterr().out.strip() == 'set lan {  }'

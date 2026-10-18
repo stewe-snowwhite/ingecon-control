@@ -186,13 +186,18 @@ def main():
     parser.add_argument('--inspect', action='store_true')
     parser.add_argument('--render', action='store_true')
     parser.add_argument('--template', type=Path, default=TEMPLATE)
+    parser.add_argument('--require-lan', action='store_true',
+                        help='Refuse activation when the primary LAN cannot be safely determined')
     args = parser.parse_args()
     if args.run:
         run()
     elif args.inspect:
         print(json.dumps(discover(*inventory(), lan_enabled=os.environ.get('INGECON_HTTP_LAN', 'true').lower() == 'true'), indent=2))
     elif args.render:
-        print(render_rules(discover(*inventory(), lan_enabled=os.environ.get('INGECON_HTTP_LAN', 'true').lower() == 'true'), args.template.read_text()))
+        snapshot = discover(*inventory(), lan_enabled=os.environ.get('INGECON_HTTP_LAN', 'true').lower() == 'true')
+        if args.require_lan and not snapshot['lan']:
+            parser.error('No safely determined LAN; no rules applied. Review the LAN or explicitly choose INGECON_HTTP_LAN=false.')
+        print(render_rules(snapshot, args.template.read_text()))
     else:
         parser.error('Choose --inspect/--render (read-only) or --run (root)')
 

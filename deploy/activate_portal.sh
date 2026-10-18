@@ -12,7 +12,9 @@ for tool in /usr/sbin/nft /usr/sbin/ip /usr/sbin/nginx /usr/bin/python3 /usr/sbi
     test -x "$tool"
 done
 test -x .venv/bin/gunicorn
-systemctl is-active --quiet tailscaled.service
+# LAN and Telegram must work without Tailscale. Preserve an existing VPN/SSH.
+ssh_active_before=$(systemctl is-active ssh.service || true)
+tailscale_active_before=$(systemctl is-active tailscaled.service || true)
 test -f instance/production/web-secret.key
 test -f instance/telegram/bot.key
 grep -qx 'INGECON_COOKIE_SECURE=false' instance/production/portal.env
@@ -70,7 +72,14 @@ if [[ -d /etc/ingecon-control ]]; then cp -a /etc/ingecon-control "$backup_dir/i
 systemctl is-active nginx tailscaled ssh ingecon-web ingecon-telegram > "$backup_dir/active-before.txt" || true
 systemctl is-enabled nginx tailscaled ingecon-web ingecon-telegram > "$backup_dir/enabled-before.txt" 2>&1 || true
 /usr/sbin/runuser -u codex -- .venv/bin/python -m deploy.prepare_portal
-/usr/bin/python3 -I deploy/http_guard.py --render --template deploy/nftables/http-guard.nft > "$backup_dir/candidate.nft"
+render_options=(--render --template deploy/nftables/http-guard.nft)
+lan_mode=true
+if grep -qx 'INGECON_HTTP_LAN=false' /etc/ingecon-control/http-guard.env 2>/dev/null; then
+    lan_mode=false  # Explicit fallback only; default activation requires LAN.
+else
+    render_options+=(--require-lan)
+fi
+INGECON_HTTP_LAN="$lan_mode" /usr/bin/python3 -I deploy/http_guard.py "${render_options[@]}" > "$backup_dir/candidate.nft"
 /usr/sbin/nft --check --file "$backup_dir/candidate.nft"
 echo "Verified backups and candidate rules: $backup_dir"
 
@@ -101,6 +110,8 @@ systemctl start ingecon-web.service
 if systemctl is-active --quiet nginx.service; then systemctl reload nginx.service; else systemctl start nginx.service; fi
 systemctl start ingecon-telegram.service
 systemctl enable ingecon-http-guard.service ingecon-web.service ingecon-telegram.service nginx.service
-systemctl is-active ingecon-http-guard.service ingecon-web.service ingecon-telegram.service nginx.service tailscaled.service
+systemctl is-active ingecon-http-guard.service ingecon-web.service ingecon-telegram.service nginx.service
 systemctl is-enabled ingecon-http-guard.service ingecon-web.service ingecon-telegram.service nginx.service
+if [[ "$ssh_active_before" == active ]]; then systemctl is-active --quiet ssh.service; fi
+if [[ "$tailscale_active_before" == active ]]; then systemctl is-active --quiet tailscaled.service; fi
 echo "Activation commands finished. Perform the checks in HTTP_PORTAL.md. Backups: $backup_dir"
