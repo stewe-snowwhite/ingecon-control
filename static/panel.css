@@ -29,6 +29,9 @@ button, a, input, select { -webkit-tap-highlight-color: transparent; }
 .navigation { display: flex; gap: 22px; margin-right: auto; flex-wrap: wrap; }
 .navigation a { color: var(--muted); font-weight: 550; }
 .navigation a[aria-current] { color: var(--accent); }
+.settings-tabs { display: flex; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid var(--line); margin-bottom: 24px; }
+.settings-tabs a { padding: 10px 16px; color: var(--muted); border-bottom: 3px solid transparent; font-weight: 600; }
+.settings-tabs a[aria-current] { color: var(--accent); border-bottom-color: var(--accent); }
 .account { display: flex; gap: 18px; align-items: center; }
 .account small { display: block; color: var(--muted); font-size: 11px; }
 .workspace { max-width: 1600px; margin: auto; padding: 36px 4vw 48px; min-height: 78vh; }

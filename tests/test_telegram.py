@@ -143,6 +143,8 @@ def test_commands_mock_telegram_api_and_db_only(tg,modbus,command):
     assert tg.api.messages[-1].parse_mode is None
     assert 'private-device-sentinel' not in str(tg.api.messages)
     assert modbus[1]==[]
+    if command == 'help':
+        assert 'Налаштування → Telegram → Створити код' in tg.api.messages[-1].text
 
 
 def test_stale_status_and_history_use_cached_data(tg):

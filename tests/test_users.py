@@ -276,8 +276,8 @@ def test_list_navigation_pagination_methods_and_no_secret_leaks(web):
     _, client = web
     admin = db.session.get(User, 1)
     html = client.get('/users').text
-    assert 'Користувачі порталу' in html and 'href="/users"' in html
-    assert '/users/1/delete' not in html and admin.password_hash not in html
+    assert 'Користувачі порталу' in html and 'href="/settings/users"' in html
+    assert '/users/1/delete' not in html and '/settings/users/1/delete' not in html and admin.password_hash not in html
     db.session.add_all(User(username=f'user-{n:02}', role='Viewer', password_hash='test-only') for n in range(51))
     db.session.commit()
     assert 'Далі →' in client.get('/users').text
@@ -289,7 +289,7 @@ def test_list_navigation_pagination_methods_and_no_secret_leaks(web):
     assert post(client, '/users').status_code == 405
     admin.role = 'Viewer'
     db.session.commit()
-    assert 'href="/users"' not in client.get('/').text
+    assert 'href="/settings/users"' not in client.get('/').text
 
 
 def test_two_admins_cannot_concurrently_delete_each_other(web, tmp_path, monkeypatch):
@@ -333,6 +333,9 @@ def test_two_admins_cannot_concurrently_delete_each_other(web, tmp_path, monkeyp
 
 def test_shared_navigation_safe_before_workers_load_new_routes(web):
     module, client = web
-    module.app.config.pop('USER_MANAGEMENT_AVAILABLE')
+    module.app.config.pop('SETTINGS_AVAILABLE')
     assert client.get('/').status_code == 200
-    assert 'href="/users"' not in client.get('/').text
+    assert 'href="/settings"' not in client.get('/').text
+    response = client.get('/telegram')
+    assert response.status_code == 200
+    assert 'href="/settings/users"' not in response.text

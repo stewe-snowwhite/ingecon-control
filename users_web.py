@@ -13,7 +13,7 @@ from models import CommandAudit, ROLES, User, db
 from security import USERNAME, roles_required
 from telegram_store import TelegramStore
 
-users_web = Blueprint('users_web', __name__, url_prefix='/users')
+users_web = Blueprint('users_web', __name__, url_prefix='/settings/users')
 
 
 def field(name):

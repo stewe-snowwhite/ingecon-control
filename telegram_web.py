@@ -6,10 +6,10 @@ from models import db, TELEGRAM_TABLES
 from security import roles_required
 from telegram_store import TelegramAccess, TelegramStore
 
-telegram_web = Blueprint('telegram_web',__name__)
+telegram_web = Blueprint('telegram_web',__name__, url_prefix='/settings/telegram')
 
 
-@telegram_web.route('/telegram',methods=['GET','POST'])
+@telegram_web.route('',methods=['GET','POST'])
 @roles_required('Administrator','Operator','Viewer')
 def settings():
     if not {table.name for table in TELEGRAM_TABLES}<=set(inspect(db.engine).get_table_names()):
@@ -26,7 +26,7 @@ def settings():
                 abort(400,str(error))
         elif actions==['unlink']:
             store.unlink(g.user.id)
-            return redirect(url_for('.settings'))
+            return redirect(url_for('telegram_web.settings'))
         else:
             abort(400,'Некоректна дія Telegram.')
     return render_template('telegram.html',link=store.web_link(g.user.id),code=code)

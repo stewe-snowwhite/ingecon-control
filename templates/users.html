@@ -1,6 +1,6 @@
-{% extends 'base.html' %}{% block title %}Користувачі{% endblock %}
-{% block content %}
-<div class="page-heading"><div><p class="eyebrow">АДМІНІСТРУВАННЯ</p><h1>Користувачі порталу</h1>
+{% extends 'settings_base.html' %}{% block title %}Налаштування · Користувачі{% endblock %}
+{% block settings_content %}
+<div class="page-heading"><div><h2>Користувачі порталу</h2>
 <p class="muted">Облікові записи та ролі доступу.</p></div>
 <a class="button primary" href="{{ url_for('users_web.add') }}">Додати користувача</a></div>
 <section class="surface"><div class="table-wrap"><table>

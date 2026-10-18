@@ -1,7 +1,7 @@
-{% extends 'base.html' %}
-{% block title %}Telegram{% endblock %}
-{% block content %}
-<h1>Telegram</h1>
+{% extends 'settings_base.html' %}
+{% block title %}Налаштування · Telegram{% endblock %}
+{% block settings_content %}
+<section class="surface"><h2>Telegram</h2>
 <p>Приватний чат, статуси з SQLite та сповіщення. Усі команди керування заблоковані.</p>
 {% if link %}
 <p>Telegram ID: <strong>{{ link.telegram_id }}</strong>. Сповіщення: {{ 'увімкнено' if link.notifications else 'вимкнено' }}.</p>
@@ -13,4 +13,4 @@
 <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" name="action" value="unlink" class="button subtle">Анулювати невикористані коди</button></form>
 {% endif %}
 {% if code %}<div class="notice warning" role="status"><p>Введіть у приватному чаті свого бота:</p><pre id="pairing-code">/start {{ code }}</pre><p>Це одноразовий секрет. Після оновлення сторінки він не показуватиметься. Новий код анулює попередній.</p></div>{% endif %}
-{% endblock %}
+</section>{% endblock %}

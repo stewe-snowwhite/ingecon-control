@@ -1,8 +1,8 @@
 <nav class="navigation" aria-label="Основна навігація">
 <a href="{{ url_for('index') }}" {% if request.endpoint == 'index' %}aria-current="page"{% endif %}>Огляд</a>
 <a href="{{ url_for('history') }}" {% if request.endpoint == 'history' %}aria-current="page"{% endif %}>Історія</a>
-<a href="{{ url_for('telegram_web.settings') }}" {% if request.endpoint == 'telegram_web.settings' %}aria-current="page"{% endif %}>Telegram</a>
+{% if config.get('SETTINGS_AVAILABLE', False) %}<a href="{{ url_for('settings') }}" {% if request.endpoint == 'settings' or request.blueprint in ('telegram_web', 'users_web', 'legacy_telegram', 'legacy_users') %}aria-current="page"{% endif %}>Налаштування</a>{% endif %}
 {% if g.user.role == 'Administrator' %}<a href="{{ url_for('add_inverter') }}">Додати інвертор</a>
-{% if config.get('USER_MANAGEMENT_AVAILABLE', False) %}<a href="{{ url_for('users_web.index') }}" {% if request.blueprint == 'users_web' %}aria-current="page"{% endif %}>Користувачі</a>{% endif %}{% endif %}</nav>
+{% endif %}</nav>
 <div class="account"><span>{{ g.user.username }} <small>{{ g.user.role }}</small></span>
 <form method="POST" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="button subtle">Вийти</button></form></div>

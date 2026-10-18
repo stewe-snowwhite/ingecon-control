@@ -16,7 +16,7 @@ from telegram_store import TelegramAccess
 log = logging.getLogger('ingecon.telegram')
 HELP = ('Команди: /start, /status, /inverters, /groups, /history, /help.\n'
         '/notifications — налаштування сповіщень. /control — вибір цілей.\n'
-        'Прив’язка: у вебпанелі Telegram → Створити код, потім /start КОД у приватному чаті.\n'
+        'Прив’язка: у вебпанелі Налаштування → Telegram → Створити код, потім /start КОД у приватному чаті.\n'
         'Дані тільки з SQLite. Start/stop заблоковані до окремого дозволу; Modbus-записи не виконуються.')
 
 

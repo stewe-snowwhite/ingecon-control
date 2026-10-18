@@ -1,5 +1,5 @@
-{% extends 'base.html' %}{% block title %}Видалити користувача{% endblock %}
-{% block content %}<section class="surface narrow"><h1>Видалити користувача</h1>
+{% extends 'settings_base.html' %}{% block title %}Налаштування · Видалити користувача{% endblock %}
+{% block settings_content %}<section class="surface narrow"><h2>Видалити користувача</h2>
 <p>Обліковий запис: <strong>{{ target.username }}</strong> · {{ target.role }}</p>
 <p class="notice warning">Обліковий запис буде видалено. Його сесії, Telegram-прив’язку, одноразові коди й очікувані команди буде відкликано. Історія подій та аудит залишаться. Дію неможливо скасувати.</p>
 <form method="POST" class="stacked-form">

@@ -50,7 +50,7 @@ class TelegramStore:
         user = session.get(User, link.user_id) if link else None
         if (not positive_id(telegram_id) or not link or not user or not user.active or
             user.role not in ('Administrator','Operator','Viewer') or link.user_version != user.session_version):
-            raise TelegramAccess('Спочатку отримайте код у вебпанелі: Telegram → Створити код. Надішліть /start КОД у приватному чаті.')
+            raise TelegramAccess('Спочатку отримайте код у вебпанелі: Налаштування → Telegram → Створити код. Надішліть /start КОД у приватному чаті.')
         return link, user
 
     def issue_code(self, user_id):

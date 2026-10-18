@@ -60,8 +60,11 @@ def create_app(config=None):
     csrf.init_app(app)
     app.register_blueprint(telegram_web)
     app.register_blueprint(users_web)
+    # Keep existing form/bookmark URLs protected by the same handlers.
+    app.register_blueprint(telegram_web, url_prefix='/telegram', name='legacy_telegram')
+    app.register_blueprint(users_web, url_prefix='/users', name='legacy_users')
     # Shared templates remain safe until existing workers load the new routes.
-    app.config['USER_MANAGEMENT_AVAILABLE'] = True
+    app.config['SETTINGS_AVAILABLE'] = True
     app.jinja_env.filters['monitor_reason'] = explain_reason
     app.jinja_env.filters['utc_time'] = lambda value: (
         datetime.fromtimestamp(value, timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
@@ -145,6 +148,11 @@ def create_app(config=None):
         db.session.commit()
         session.clear()
         return redirect(url_for('login'))
+
+    @app.get('/settings')
+    @roles_required(*ALL_ROLES)
+    def settings():
+        return redirect(url_for('telegram_web.settings'))
 
     @app.get('/download-log')
     @roles_required('Administrator')

@@ -1,5 +1,5 @@
-{% extends 'base.html' %}{% block title %}Додати користувача{% endblock %}
-{% block content %}<section class="surface narrow"><h1>Додати користувача</h1>
+{% extends 'settings_base.html' %}{% block title %}Налаштування · Додати користувача{% endblock %}
+{% block settings_content %}<section class="surface narrow"><h2>Додати користувача</h2>
 {% if error %}<p class="notice danger" role="alert">{{ error }}</p>{% endif %}
 <form method="POST" class="stacked-form">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
