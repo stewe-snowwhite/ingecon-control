@@ -21,6 +21,9 @@ from security import USERNAME, authenticate, load_user, log_failure, reserve_log
 from telegram_web import telegram_web
 from users_web import users_web
 from modbus_web import modbus_web
+from discovery_web import web as discovery_web, context as discovery_context, integer as form_integer, ready as discovery_ready
+from operation_locks import resource_lock, OperationBusy
+from modbus_config import load_configuration
 from configuration import cookie_secure_from_env, secret_from_env
 
 csrf = CSRFProtect()
@@ -65,6 +68,8 @@ def create_app(config=None):
     app.register_blueprint(telegram_web)
     app.register_blueprint(users_web)
     app.register_blueprint(modbus_web)
+    app.register_blueprint(discovery_web)
+    app.config['DISCOVERY_AVAILABLE'] = True
     app.config['MODBUS_TOOLS_AVAILABLE'] = True
     # Keep existing form/bookmark URLs protected by the same handlers.
     app.register_blueprint(telegram_web, url_prefix='/telegram', name='legacy_telegram')
@@ -229,6 +234,8 @@ def create_app(config=None):
         db.session.delete(inverter)
 
     def inverter_fields():
+        if any(len(request.form.getlist(key)) > 1 for key in ('name', 'group', 'ip', 'login', 'password')):
+            abort(400, 'Неоднозначні поля інвертора.')
         fields = {key: request.form.get(key, '').strip() for key in ('name', 'group', 'ip', 'login')}
         if any(not fields[key] or len(fields[key]) > 100 for key in ('name', 'group', 'ip')):
             abort(400, 'Назва, група та IP обов’язкові; максимум 100 символів.')
@@ -244,33 +251,79 @@ def create_app(config=None):
         return dict(name=fields['name'], group=fields['group'], ip_address=str(address),
                     login=fields['login'], password=password)
 
+    def transport_fields(existing=None):
+        config = existing or load_configuration()
+        return dict(port=form_integer('port', 1, 65535, config.port),
+                    device_id=form_integer('device_id', 1, 247, config.device_id))
+
+    def check_duplicate(fields, transport, exclude=None):
+        config = load_configuration()
+        rows = db.session.execute(db.select(Inverter.id, MonitorConfig.port, MonitorConfig.device_id)
+            .outerjoin(MonitorConfig, MonitorConfig.inverter_id == Inverter.id)
+            .where(Inverter.ip_address == fields['ip_address'])).all()
+        if any(key != exclude and (port or config.port, unit or config.device_id) ==
+               (transport['port'], transport['device_id']) for key, port, unit in rows):
+            abort(400, 'Інвертор із такими IP, портом і Unit ID вже зареєстрований.')
+
     @app.route('/add', methods=['GET', 'POST'])
     @roles_required('Administrator')
     def add_inverter():
         if request.method == 'POST':
-            db.session.add(Inverter(**inverter_fields()))
-            db.session.commit()
-            flash('Інвертор додано без перевірки підключення.', 'info')
+            if request.form.getlist('confirm_unverified') != ['yes']:
+                abort(400, 'Підтвердьте збереження без перевірки доступності інвертора.')
+            fields, transport = inverter_fields(), transport_fields()
+            try:
+                with resource_lock('inverter-inventory'):
+                    db.session.rollback()
+                    check_duplicate(fields, transport)
+                    inverter = Inverter(**fields)
+                    db.session.add(inverter)
+                    db.session.flush()
+                    # Explicit transport, no read profile automatically trusted.
+                    db.session.add(MonitorConfig(inverter_id=inverter.id, **transport))
+                    db.session.commit()
+            except OperationBusy:
+                abort(409, 'Облік пристроїв зайнятий. Повторіть запит.')
+            flash('Інвертор додано без перевірки підключення. Профіль моніторингу налаштовується окремо.', 'info')
             return redirect(url_for('index'))
+        defaults = load_configuration()
+        candidate = None
+        if request.args.get('candidate'):
+            discovery_ready()
+            from models import DiscoveryResult
+            candidate = db.get_or_404(DiscoveryResult, request.args['candidate'])
         groups = db.session.scalars(db.select(Inverter.group).distinct()).all()
-        return render_template('add_inverter.html', groups=groups)
+        return render_template('add_inverter.html', groups=groups, defaults=defaults, candidate=candidate,
+                               **discovery_context())
 
     @app.route('/edit/<int:inverter_id>', methods=['GET', 'POST'])
     @roles_required('Administrator')
     def edit_inverter(inverter_id):
         inverter = db.get_or_404(Inverter, inverter_id)
+        config = db.session.get(MonitorConfig, inverter_id)
         if request.method == 'POST':
-            fields = inverter_fields()
-            # Blank password means retain current value; never send it back to HTML.
-            if not fields['password']:
-                fields.pop('password')
-            for key, value in fields.items():
-                setattr(inverter, key, value)
-            db.session.commit()
+            fields, transport = inverter_fields(), transport_fields(config)
+            try:
+                with resource_lock('inverter-inventory'):
+                    check_duplicate(fields, transport, exclude=inverter.id)
+                    # Blank password retains the existing secret, never returned in HTML.
+                    if not fields['password']:
+                        fields.pop('password')
+                    for key, value in fields.items():
+                        setattr(inverter, key, value)
+                    if config is None:
+                        config = MonitorConfig(inverter_id=inverter_id)
+                        db.session.add(config)
+                    for key, value in transport.items():
+                        setattr(config, key, value)
+                    db.session.commit()
+            except OperationBusy:
+                abort(409, 'Облік пристроїв зайнятий. Повторіть запит.')
             flash('Інвертор оновлено.', 'info')
             return redirect(url_for('index'))
         groups = db.session.scalars(db.select(Inverter.group).distinct()).all()
-        return render_template('edit_inverter.html', inverter=inverter, groups=groups)
+        return render_template('edit_inverter.html', inverter=inverter, groups=groups,
+                               transport=config or load_configuration())
 
     @app.post('/delete/<int:inverter_id>')
     @roles_required('Administrator')

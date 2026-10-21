@@ -48,7 +48,9 @@ def test_role_matrix(web, modbus, tmp_path, user_role, path, method):
     module.app.config['MODBUS_LOG_PATH'] = str(tmp_path / 'test.log')
     Path(module.app.config['MODBUS_LOG_PATH']).write_text('synthetic log only')
     data = {'name': 'Edited', 'group': 'A', 'ip': '192.0.2.1', 'login': '', 'password': '',
-            'selected_ids': str(inv.id), 'action': 'test'}
+            'selected_ids': str(inv.id), 'action': 'test', 'confirm_unverified': 'yes'}
+    if path == '/add':
+        data['ip'] = '192.0.2.2'
     response = client.get(path) if method == 'GET' else post(client, path, data)
     allowed = (path == '/' or user_role == 'Administrator' or
                (user_role == 'Operator' and path in ('/test/1', '/control')))

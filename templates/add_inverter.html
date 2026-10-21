@@ -1,1 +1,44 @@
-{% extends 'inverter_form.html' %}
+{% extends 'base.html' %}
+{% block title %}Додати інвертор{% endblock %}
+{% block scripts %}{% if config.get('DISCOVERY_AVAILABLE', false) %}<script src="{{ url_for('static', filename='discovery.js') }}" defer></script>{% endif %}{% endblock %}
+{% block content %}
+<section class="surface"><p class="eyebrow">ОБЛІК ПРИСТРОЇВ</p><h1>Додати інвертор</h1>
+{% if config.get('DISCOVERY_AVAILABLE', false) %}
+<nav class="settings-tabs" aria-label="Режим додавання"><a class="button" href="{{ url_for('add_inverter') }}" {% if request.args.get('mode') != 'manual' %}aria-current="page"{% endif %}>Автоматичний пошук</a><a class="button" href="{{ url_for('add_inverter', mode='manual') }}" {% if request.args.get('mode') == 'manual' %}aria-current="page"{% endif %}>Додати вручну</a></nav>
+{% if request.args.get('mode') != 'manual' %}
+<p class="notice info">Пошук лише в погоджених приватних мережах. TCP 502 та профіль FC04 не визначають модель достовірно. Modbus-записи заблоковано.</p>
+{% if discovery_warning %}<p class="notice danger">{{ discovery_warning }}</p>{% endif %}
+{% if not discovery_ready %}<p class="notice danger">Схему пошуку ще не підготовлено. Використайте ручне додавання або інструкцію DISCOVERY.md.</p>{% else %}
+<h2>Дозволені підмережі</h2>
+<p>Виявлені локальні сегменти (ще потребують погодження адміністратора): {% for interface, cidr, local in local_networks %}<span>{{ cidr }} · {{ interface }} · {{ local }}</span>{% if not loop.last %}; {% endif %}{% else %}не знайдено{% endfor %}.</p>
+<form method="post" action="{{ url_for('discovery_web.subnets') }}" class="stacked-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<label>CIDR<input name="cidr" placeholder="Приватна мережа /22–/30" required maxlength="18" list="local-cidrs"></label><datalist id="local-cidrs">{% for interface, cidr, local in local_networks %}<option value="{{ cidr }}">{{ interface }}</option>{% endfor %}</datalist>
+<label><input type="checkbox" name="approve" value="yes" required> Погоджую сканування цього приватного діапазону. Маршрутизацію буде перевірено; VPN і службові мережі заборонені.</label><button class="button" type="submit">Погодити CIDR</button></form>
+{% for subnet in subnets %}<form method="post" action="{{ url_for('discovery_web.delete_subnet', subnet_id=subnet.id) }}" class="button-row"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><span>{{ subnet.cidr }} · {{ subnet.interface }} · {{ 'L2 / MAC' if subnet.mode == 'local' else 'Маршрутизована' }}</span><label><input type="checkbox" name="confirm" value="yes" required> Підтверджую</label><button class="button danger-outline">Видалити дозвіл</button></form>{% endfor %}
+<form method="post" action="{{ url_for('discovery_web.start') }}" class="stacked-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<fieldset><legend>Діапазони пошуку</legend><button type="button" id="discovery-select-all" class="button">Вибрати всі</button>{% for subnet in subnets %}<label><input type="checkbox" name="subnet_id" value="{{ subnet.id }}"> {{ subnet.cidr }}</label>{% else %}<p>Спочатку погодьте хоча б один CIDR.</p>{% endfor %}</fieldset>
+<label>Unit ID<input name="device_id" type="number" min="1" max="247" value="1" required></label>
+<p class="muted">Порт 502; до 4 паралельних перевірок; TCP 0,4 с, FC04 1 с. Максимум 1024 адреси. Перевіряється лише обраний Unit ID.</p>
+<label><input type="checkbox" name="confirm_large" value="yes"> Погоджую тривале сканування понад 254 адрес (для великих діапазонів).</label>
+<button type="submit" class="button primary" {% if not subnets %}disabled{% endif %}>Почати пошук</button></form>
+<h2>Поточний і попередні пошуки</h2>
+{% for scan in scans %}<div class="button-row"><a class="button" href="{{ url_for('add_inverter', scan=scan.id) }}">#{{ scan.id }} · {{ scan.created_at|utc_time }} · {{ scan.state }} · {{ scan.processed }}/{{ scan.total }}</a>{% if scan.state in ('queued', 'running', 'cancelling') %}<form method="post" action="{{ url_for('discovery_web.cancel', scan_id=scan.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="button danger-outline">Скасувати</button></form>{% endif %}</div>{% else %}<p>Пошуків ще немає.</p>{% endfor %}
+{% set selected_scan = request.args.get('scan') or (scans[0].id if scans else none) %}
+{% if selected_scan %}<section id="discovery-results" data-url="{{ url_for('discovery_web.status', scan_id=selected_scan|int) }}"><p id="discovery-progress" role="status">Завантаження результатів…</p><progress id="discovery-progress-bar" max="1" value="0" aria-label="Прогрес пошуку"></progress><p id="discovery-error" class="notice danger" role="alert" hidden></p><div class="table-wrap"><table><thead><tr><th>IP / MAC</th><th>Підмережа</th><th>Modbus</th><th>Перевірка</th><th>Облік</th></tr></thead><tbody id="discovery-rows"></tbody></table></div><p id="discovery-empty" hidden>Кандидатів ще не знайдено.</p></section>{% endif %}
+{% endif %}
+{% endif %}
+{% endif %}
+{% if request.args.get('mode') == 'manual' or not config.get('DISCOVERY_AVAILABLE', false) %}
+<h2>Додати вручну</h2><p class="muted">Доступність не перевіряється під час збереження. Додайте пристрій навіть без зв’язку, підтвердивши це нижче.</p>
+<form method="post" class="stacked-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<label for="name">Назва<input id="name" name="name" required maxlength="100" value=""></label>
+<label for="group_input">Група<input id="group_input" name="group" list="group-options" required maxlength="100"></label><datalist id="group-options">{% for group in groups %}<option value="{{ group }}">{% endfor %}</datalist>
+<label for="ip">IP<input id="ip" name="ip" required maxlength="100" value="{{ candidate.ip if candidate else '' }}"></label>
+<label for="port">Порт<input id="port" name="port" type="number" min="1" max="65535" required value="{{ candidate.port if candidate else (defaults.port if defaults is defined else 502) }}"></label>
+<label for="device_id">Unit ID<input id="device_id" name="device_id" type="number" min="1" max="247" required value="{{ candidate.device_id if candidate else (defaults.device_id if defaults is defined else 1) }}"></label>
+<label for="login">Логін інвертора<input id="login" name="login" maxlength="100" autocomplete="off"></label>
+<label for="password">Пароль інвертора<input id="password" name="password" type="password" maxlength="100" autocomplete="new-password"></label>
+<label><input type="checkbox" name="confirm_unverified" value="yes" required> Підтверджую додавання без перевірки доступності. Перевірка пошуку не гарантує модель чи сумісність команд.</label>
+<div class="button-row"><a class="button" href="{{ url_for('index') }}">Назад</a><button type="submit" class="button primary">Додати інвертор</button></div></form>
+{% endif %}
+</section>{% endblock %}

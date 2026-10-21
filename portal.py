@@ -13,7 +13,7 @@ from werkzeug.exceptions import SecurityError
 
 from app import create_app
 from device_safety import disable_device_transports
-from models import db
+from models import db, DISCOVERY_TABLES
 from portal_hosts import current_hosts
 
 PRODUCTION_DATABASE = Path('/opt/ingecon-control/instance/production/ingecon.sqlite')
@@ -28,7 +28,7 @@ def validate_database(uri):
             raise ValueError
         with sqlite3.connect(path.as_uri()+'?mode=ro', uri=True) as connection:
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        if 'demo_metadata' in tables or not set(db.metadata.tables) <= tables:
+        if 'demo_metadata' in tables or not (set(db.metadata.tables)-{table.name for table in DISCOVERY_TABLES}) <= tables:
             raise ValueError
     except (ArgumentError, TypeError, ValueError, sqlite3.Error):
         raise RuntimeError('Portal requires the existing, prepared production SQLite database; no automatic migrations are allowed.') from None

@@ -29,6 +29,8 @@ def isolation(monkeypatch, tmp_path):
     monkeypatch.setenv('INGECON_MODBUS_CONFIG_FILE', str(tmp_path/'modbus.json'))
     monkeypatch.delenv('INGECON_REGISTER_READS_ENABLED', raising=False)
     monkeypatch.chdir(tmp_path)
+    import discovery
+    monkeypatch.setattr(discovery, 'local_inventory', lambda: [])
     import pymodbus.client
     monkeypatch.setattr(pymodbus.client, 'ModbusTcpClient', FakeModbusTcpClient)
     import modbus_utils

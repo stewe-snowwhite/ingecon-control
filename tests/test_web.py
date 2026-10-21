@@ -2,7 +2,7 @@ import pytest
 from tests.helpers import post, confirmed_post
 
 def add(client,name='Mock A',group='A',ip='192.0.2.1'):
-    return post(client, '/add',data=dict(name=name,group=group,ip=ip,login='',password=''))
+    return post(client, '/add',data=dict(name=name,group=group,ip=ip,login='',password='',confirm_unverified='yes'))
 
 def test_crud_groups_and_dashboard(web):
     module, client=web
@@ -41,7 +41,7 @@ def test_missing_selection_and_action(web,modbus):
 
 def test_test_and_bulk_delete(web,modbus):
     module,client=web; _,clients=modbus
-    add(client); add(client,'Mock B')
+    add(client); add(client,'Mock B',ip='192.0.2.2')
     ids=[str(inv.id) for inv in module.Inverter.query.all()]
     post(client, '/control',data={'selected_ids':ids,'action':'test'})
     assert clients == []

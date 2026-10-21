@@ -174,3 +174,46 @@ class TelegramRate(db.Model):
 
 TELEGRAM_TABLES = [model.__table__ for model in (TelegramLinkCode, TelegramLink, TelegramCommand,
                    CommandAudit, TelegramDelivery, TelegramUpdate, TelegramRate)]
+
+
+class DiscoverySubnet(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    cidr = db.Column(db.String(18), nullable=False, unique=True)
+    interface = db.Column(db.String(15), nullable=False)
+    mode = db.Column(db.String(8), nullable=False)
+    approved_by = db.Column(db.Integer, nullable=False)
+    approved_at = db.Column(db.Float, nullable=False)
+
+
+class DiscoveryScan(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, nullable=False)
+    user_version = db.Column(db.Integer, nullable=False)
+    subnets = db.Column(db.JSON, nullable=False)
+    device_id = db.Column(db.Integer, nullable=False)
+    state = db.Column(db.String(16), nullable=False, default='queued', index=True)
+    total = db.Column(db.Integer, nullable=False)
+    processed = db.Column(db.Integer, nullable=False, default=0)
+    found = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.Float, nullable=False)
+    heartbeat = db.Column(db.Float, nullable=True)
+    finished_at = db.Column(db.Float, nullable=True)
+    error = db.Column(db.String(256), nullable=True)
+
+
+class DiscoveryResult(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    scan_id = db.Column(db.Integer, db.ForeignKey('discovery_scan.id'), nullable=False, index=True)
+    ip = db.Column(db.String(15), nullable=False)
+    mac = db.Column(db.String(17), nullable=True)
+    cidr = db.Column(db.String(18), nullable=False)
+    port = db.Column(db.Integer, nullable=False)
+    device_id = db.Column(db.Integer, nullable=False)
+    tcp_ok = db.Column(db.Boolean, nullable=False)
+    modbus_ok = db.Column(db.Boolean, nullable=False)
+    confidence = db.Column(db.String(16), nullable=False)
+    reason = db.Column(db.String(256), nullable=False)
+    __table_args__ = (db.UniqueConstraint('scan_id', 'ip'),)
+
+
+DISCOVERY_TABLES = [model.__table__ for model in (DiscoverySubnet, DiscoveryScan, DiscoveryResult)]
