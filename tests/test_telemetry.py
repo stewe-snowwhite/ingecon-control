@@ -102,7 +102,7 @@ def test_html_api_telemetry_is_readonly_for_all_roles(web,modbus,role):
     data = client.get('/api/statuses').json['inverters'][0]
     assert data['active_power_raw'] == 6298 and data['active_power_w'] == 62980
     html = client.get('/').get_data(as_text=True)
-    for value in ('Підключений до мережі', '62,98 кВт', 'Код: 1', '100%', 'Доступність','Робочий стан'):
+    for value in ('Підключений до мережі', '62,98 кВт', 'Без обмеження (1)', '100%', 'Доступність','Робочий стан'):
         assert value in html
     assert modbus[1] == []
 

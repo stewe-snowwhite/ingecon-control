@@ -19,6 +19,14 @@
   function formatPower(watts) {
     return Number.isFinite(watts) ? (watts / 1000).toFixed(2).replace('.', ',') + ' кВт' : '—';
   }
+  function formatLimitReason(code, catalog) {
+    if (!Number.isInteger(code)) return {label: '—', hint: ''};
+    // Cached pre-upgrade HTML has no catalog until the web worker is restarted.
+    if (!catalog) return {label: 'Код: ' + code, hint: ''};
+    const entry = Object.prototype.hasOwnProperty.call(catalog, code) ? catalog[code] : null;
+    return entry ? {label: entry.label + ' (' + code + ')', hint: entry.hint} :
+      {label: 'Невідома причина (код ' + code + ')', hint: 'Цей код відсутній у довіднику причин для INGECON SUN 100TL.'};
+  }
   function freshSnapshot(snapshot, now) {
     const monitor = {...snapshot.monitor};
     const ttl = monitor.stale_after_seconds;
@@ -48,7 +56,7 @@
         ['icmp', 'tcp', 'modbus'].every(key => row.checks[key] &&
           [true, false, null].includes(row.checks[key].ok)));
   }
-  const model = {formatUtc, formatPower, filterRows, counts, freshSnapshot, validSnapshot};
+  const model = {formatUtc, formatPower, formatLimitReason, filterRows, counts, freshSnapshot, validSnapshot};
   if (typeof module !== 'undefined' && module.exports) module.exports = model;
   if (typeof document === 'undefined') return;
   const root = document.getElementById('dashboard');
@@ -56,6 +64,7 @@
 
   const el = id => document.getElementById(id);
   const role = root.dataset.role;
+  const limitReasons = root.dataset.limitReasons ? JSON.parse(root.dataset.limitReasons) : null;
   const selected = new Set();
   let snapshot = null;
   let receivedAt = 0;
@@ -110,7 +119,11 @@
     const power = cell('Активна потужність'); power.dataset.telemetry = ''; power.textContent = formatPower(row.active_power_w);
     const limit = cell('Ліміт'); limit.dataset.telemetry = ''; limit.textContent = row.power_limit_percent == null ? '—' : row.power_limit_percent + '%';
     const reason = cell('Причина обмеження'); reason.dataset.telemetry = '';
-    reason.textContent = row.limit_reason_code == null ? '—' : 'Код: ' + row.limit_reason_code;
+    const description = formatLimitReason(row.limit_reason_code, limitReasons);
+    const reasonName = node('span', description.label, 'limit-reason');
+    if (description.hint) reasonName.title = description.hint;
+    if (Number.isInteger(row.limit_reason_code)) reasonName.dataset.limitReasonCode = String(row.limit_reason_code);
+    reason.append(reasonName);
     tr.append(device, group, status, checks, checked, operating, power, limit, reason);
     return tr;
   }

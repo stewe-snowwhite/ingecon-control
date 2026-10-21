@@ -2,7 +2,8 @@
 {% block title %}Огляд інверторів{% endblock %}
 {% block scripts %}<script src="{{ url_for('static', filename='dashboard.js') }}" defer></script>{% endblock %}
 {% block content %}
-<section id="dashboard" data-api="{{ url_for('statuses') }}" data-role="{{ g.user.role }}" data-writes="{{ 'true' if config.MODBUS_WRITES_ENABLED else 'false' }}">
+{% from 'limit_reasons.html' import LIMIT_REASONS %}
+<section id="dashboard" data-api="{{ url_for('statuses') }}" data-role="{{ g.user.role }}" data-writes="{{ 'true' if config.MODBUS_WRITES_ENABLED else 'false' }}" data-limit-reasons="{{ LIMIT_REASONS | tojson | forceescape }}">
 <div class="page-heading"><div><p class="eyebrow">ОГЛЯД СИСТЕМИ</p><h1>Інвертори</h1><p class="muted">Доступність, зв’язок та останні результати перевірок.</p></div><div class="live-note"><span class="live-dot"></span><span id="refresh-label">Оновлення кожні 10 секунд</span></div></div>
 <div class="summary" aria-label="Загальна статистика">{% for key, label in [('total','Усього інверторів'), ('Online','Online'), ('Offline','Offline'), ('Degraded','Degraded'), ('Unknown','Unknown')] %}
 <article class="summary-card {{ key | lower }}"><span class="summary-label">{{ label }}</span><strong data-count="{{ key }}">{{ counts[key] }}</strong><small>{{ 'У всіх групах' if key == 'total' else 'Поточний ефективний стан' }}</small></article>{% endfor %}</div>

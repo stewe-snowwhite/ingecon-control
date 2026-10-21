@@ -4,6 +4,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const model = require('../../static/dashboard.js');
+// Read the exact catalog used by Jinja; there is no separate JS translation table.
+const source = fs.readFileSync('templates/limit_reasons.html','utf8');
+const catalog = JSON.parse(source.split('{% set LIMIT_REASONS = ')[1].split(' %}')[0]);
 
 function sample() {
   return {
@@ -78,6 +81,29 @@ test('power uses watts with explicit kW display, including zero and reverse flow
   assert.equal(model.formatPower(null), '—');
 });
 
+const reasonLabels = [
+  'Без обмеження', 'Без обмеження',
+  'Не визначено виробником', 'Не визначено виробником', 'Не визначено виробником',
+  "Зовнішня команда через зв'язок", 'Частота електромережі', 'Напруга електромережі',
+  'Обмеження вихідного струму / пріоритет реактивної потужності', 'Налаштування інвертора',
+  'Початкове нарощування потужності', 'Власне споживання', 'Зарезервовано виробником',
+  'Залежність потужності від напруги'
+];
+
+test('reason formatting preserves zero, numeric diagnostics and manufacturer meanings for 0–4', () => {
+  for (const [code, label] of reasonLabels.entries()) {
+    const result = model.formatLimitReason(code, catalog);
+    assert.equal(result.label, `${label} (${code})`);
+    assert.equal(result.hint, catalog[code].hint);
+    assert.ok(result.hint.length > 0);
+  }
+  assert.equal(model.formatLimitReason(65534, catalog).label, 'Невідома причина (код 65534)');
+  assert.ok(model.formatLimitReason(65534, catalog).hint);
+  for (const value of [null, undefined, '10', '<img src=x>', false, NaN, 1.5]) {
+    assert.deepEqual(model.formatLimitReason(value, catalog), {label:'—',hint:''});
+  }
+});
+
 // A small DOM double exercises the actual polling script. No browser, server or network is used.
 class Element {
   constructor(tag='div') { this.tag=tag; this.dataset={}; this.children=[]; this.listeners={}; this.value=''; this.hidden=false; this.textContent=''; }
@@ -88,12 +114,13 @@ class Element {
   querySelectorAll() { return []; }
   querySelector() { return null; }
 }
-function browserDouble(initiallyFail=false) {
+function browserDouble(initiallyFail=false, reasonCode=1, includeCatalog=true) {
   const elements = new Map();
   const ids = ['dashboard','search','group-filter','state-filter','device-rows','filters','heartbeat','heartbeat-time',
     'monitor-detail','connection-warning','list-count','empty-list','api-warning','refresh-label','page-alert'];
   ids.forEach(id=>elements.set(id,new Element()));
   elements.get('dashboard').dataset = {api:'/api/statuses',role:'Viewer',writes:'false'};
+  if (includeCatalog) elements.get('dashboard').dataset.limitReasons = JSON.stringify(catalog);
   const countElements = ['total','Online','Offline','Degraded','Unknown'].map(key=>{
     const item = new Element(); item.dataset.count=key; item.textContent=(key==='total' || key==='Online') ? '1' : '0'; return item;
   });
@@ -113,7 +140,9 @@ function browserDouble(initiallyFail=false) {
     fetch:async(url,options)=>{
       assert.equal(url,'/api/statuses'); assert.equal(options.credentials,'same-origin');
       requests++; if (fail) throw new TypeError('simulated connection loss');
-      return {status,ok:status===200,json:async()=>sample()};
+      return {status,ok:status===200,json:async()=>{
+        const data=sample(); data.inverters[0].limit_reason_code=reasonCode; return data;
+      }};
     },
     setTimeout:(fn,ms)=>{const id=++nextId;timers.set(id,{fn,ms});return id;},
     clearTimeout:id=>timers.delete(id), setInterval:fn=>{context.tick=fn;}
@@ -130,6 +159,41 @@ async function nextPoll(browser) {
   browser.timers.delete(entry[0]); entry[1].fn(); await settle();
 }
 
+for (const [code, label] of reasonLabels.entries()) {
+  test(`polling renders reason ${code} with the shared hover hint and numeric code`, async () => {
+    const browser = browserDouble(false, code); await settle();
+    const span = browser.elements.get('device-rows').children[0].children[8].children[0];
+    assert.equal(span.textContent, `${label} (${code})`);
+    assert.equal(span.title, catalog[code].hint);
+    assert.equal(span.dataset.limitReasonCode, String(code));
+  });
+}
+
+test('polling renders unknown and absent reasons and removes expired labels and hints', async () => {
+  for (const code of [65534, null]) {
+    const browser = browserDouble(false, code); await settle();
+    let span = browser.elements.get('device-rows').children[0].children[8].children[0];
+    assert.equal(span.textContent, code === null ? '—' : 'Невідома причина (код 65534)');
+    assert.equal(span.dataset.limitReasonCode, code === null ? undefined : '65534');
+    if (code === null) assert.equal(span.title, undefined);
+    else assert.ok(span.title);
+  }
+  const browser = browserDouble(false, 10); await settle();
+  browser.expire(); browser.context.tick();
+  const span = browser.elements.get('device-rows').children[0].children[8].children[0];
+  assert.equal(span.textContent, '—');
+  assert.equal(span.title, undefined);
+  assert.equal(span.dataset.limitReasonCode, undefined);
+});
+
+test('new JS remains compatible with cached pre-upgrade HTML until web restart', async () => {
+  const browser = browserDouble(false, 10, false); await settle();
+  const span = browser.elements.get('device-rows').children[0].children[8].children[0];
+  assert.equal(span.textContent, 'Код: 10');
+  assert.equal(browser.requests(), 1);
+  assert.equal(browser.context.window.IngeconPanel.connected, true);
+});
+
 test('actual polling updates HTML safely, reports outage, expires old samples and recovers', async () => {
   const browser = browserDouble(); await settle();
   assert.equal(browser.requests(),1);
@@ -138,7 +202,7 @@ test('actual polling updates HTML safely, reports outage, expires old samples an
   assert.equal(row.children[0].children[0].textContent,'Сонце <img src=x>'); // text, not parsed HTML.
   assert.equal(row.children[5].children[0].textContent,'Підключений до мережі');
   assert.equal(row.children[6].textContent,'62,98 кВт');
-  assert.equal(row.children[8].textContent,'Код: 1');
+  assert.equal(row.children[8].children[0].textContent,'Без обмеження (1)');
   browser.fail(); await nextPoll(browser);
   assert.equal(browser.context.window.IngeconPanel.connected,false);
   assert.equal(browser.elements.get('api-warning').hidden,false);

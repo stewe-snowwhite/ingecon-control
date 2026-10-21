@@ -1,3 +1,4 @@
+{% from 'limit_reasons.html' import reason %}
 <tr data-id="{{ inverter.id }}">
 {% if g.user.role != 'Viewer' %}<td class="select-cell" data-label="Обрати"><input type="checkbox" name="selected_ids" value="{{ inverter.id }}" aria-label="Обрати {{ inverter.name }}"></td>{% endif %}
 <td data-label="Пристрій">{% if g.user.role == 'Administrator' %}<a class="device-name" href="{{ url_for('edit_inverter', inverter_id=inverter.id) }}">{{ inverter.name }}</a>{% else %}<strong class="device-name">{{ inverter.name }}</strong>{% endif %}<small class="mono">{{ inverter.ip_address }}</small></td>
@@ -8,4 +9,4 @@
 <td data-label="Робочий стан" data-telemetry>{{ inverter.get('operating_state_label') or '—' }}{% if inverter.get('operating_state_code') is not none %}<small class="muted">Код: {{ inverter.operating_state_code }}</small>{% endif %}</td>
 <td data-label="Активна потужність" data-telemetry>{{ ('%.2f' | format(inverter.active_power_w / 1000)).replace('.', ',') ~ ' кВт' if inverter.get('active_power_w') is not none else '—' }}</td>
 <td data-label="Ліміт" data-telemetry>{{ ('%g' | format(inverter.power_limit_percent)) ~ '%' if inverter.power_limit_percent is not none else '—' }}</td>
-<td data-label="Причина обмеження" data-telemetry>{{ 'Код: ' ~ inverter.limit_reason_code if inverter.get('limit_reason_code') is not none else '—' }}</td></tr>
+<td data-label="Причина обмеження" data-telemetry>{{ reason(inverter.get('limit_reason_code')) }}</td></tr>
