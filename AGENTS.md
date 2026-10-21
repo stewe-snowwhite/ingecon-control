@@ -52,11 +52,12 @@ Target hardware:
 ## Mandatory Git and Production Release Policy
 - Before every change, inspect `git status`, the current branch and synchronization with GitHub. Fetch remote refs without overwriting local work.
 - Preserve all uncommitted changes; do not discard or overwrite another person's work.
+- The only working branch is `main`. Do not create additional branches without explicit user permission. Retain explicitly authorized backup refs until their removal is authorized.
 - Commit every completed logical change to code, application configuration, migrations, documentation or tests with a clear message.
-- After successful checks, push the corresponding branch to GitHub. For this project this policy supersedes earlier task-specific instructions to make local-only commits.
-- Before production deployment, verify that the exact intended commit is available on GitHub. Do not merge into `main` automatically.
+- After successful checks and at the end of every completed task, run `git push origin main`. If authentication or another blocker prevents publication, report it explicitly; never claim unpublished changes are synchronized. This policy supersedes earlier task-specific instructions to make local-only commits.
+- Before production deployment, verify that the exact intended commit is available in GitHub's `main`. Do not deploy unpublished commits.
 - After successful production validation, create an annotated production release tag and push that tag to GitHub. Do not label an unverified deployment as a successful release.
 - Every final report must state branch, full commit SHA, production release tag (or why none exists), and the push result.
-- Never force push, rewrite Git history or delete remote branches without separate explicit authorization.
+- Never force push or rewrite Git history. Do not delete remote branches without separate explicit authorization.
 - Never commit `.env` files, credentials, passwords, tokens, private keys, SQLite databases, logs, backups or other runtime secrets.
 - Production migrations require a verified SQLite backup. Preserve a source/configuration snapshot and an automatic rollback path before activation; do not restore an older database over newer operational data.
