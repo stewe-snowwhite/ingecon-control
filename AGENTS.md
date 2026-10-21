@@ -48,3 +48,15 @@ Target hardware:
 - Explain changes and risks.
 - Use Ukrainian for progress reports and explanations.
 
+
+## Mandatory Git and Production Release Policy
+- Before every change, inspect `git status`, the current branch and synchronization with GitHub. Fetch remote refs without overwriting local work.
+- Preserve all uncommitted changes; do not discard or overwrite another person's work.
+- Commit every completed logical change to code, application configuration, migrations, documentation or tests with a clear message.
+- After successful checks, push the corresponding branch to GitHub. For this project this policy supersedes earlier task-specific instructions to make local-only commits.
+- Before production deployment, verify that the exact intended commit is available on GitHub. Do not merge into `main` automatically.
+- After successful production validation, create an annotated production release tag and push that tag to GitHub. Do not label an unverified deployment as a successful release.
+- Every final report must state branch, full commit SHA, production release tag (or why none exists), and the push result.
+- Never force push, rewrite Git history or delete remote branches without separate explicit authorization.
+- Never commit `.env` files, credentials, passwords, tokens, private keys, SQLite databases, logs, backups or other runtime secrets.
+- Production migrations require a verified SQLite backup. Preserve a source/configuration snapshot and an automatic rollback path before activation; do not restore an older database over newer operational data.
