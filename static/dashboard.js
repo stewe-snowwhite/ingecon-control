@@ -11,6 +11,23 @@
       (!filters.state || row.state === filters.state) &&
       (!q || [row.name, row.ip_address, row.group].some(value => value.toLocaleLowerCase().includes(q))));
   }
+  const SORT_LABELS = {name: 'Назва', group: 'Група', active_power_w: 'Потужність', power_limit_percent: 'Обмеження'};
+  const textOrder = new Intl.Collator('uk', {numeric: true, sensitivity: 'base'});
+  function sortRows(rows, key, direction = 'asc') {
+    if (!Object.prototype.hasOwnProperty.call(SORT_LABELS, key) || !['asc', 'desc'].includes(direction)) return [...rows];
+    const sign = direction === 'desc' ? -1 : 1;
+    const numeric = key === 'active_power_w' || key === 'power_limit_percent';
+    return [...rows].sort((a, b) => {
+      let comparison;
+      if (numeric) {
+        const absentA = !Number.isFinite(a[key]), absentB = !Number.isFinite(b[key]);
+        // Missing/stale values remain last in both directions. Zero is a real value.
+        if (absentA !== absentB) return absentA ? 1 : -1;
+        comparison = absentA ? 0 : a[key] - b[key];
+      } else comparison = textOrder.compare(a[key], b[key]);
+      return comparison * sign || a.id - b.id;
+    });
+  }
   function counts(rows) {
     const result = {total: rows.length, Online: 0, Offline: 0, Degraded: 0, Unknown: 0};
     rows.forEach(row => result[STATES.includes(row.state) ? row.state : 'Unknown']++);
@@ -56,7 +73,7 @@
         ['icmp', 'tcp', 'modbus'].every(key => row.checks[key] &&
           [true, false, null].includes(row.checks[key].ok)));
   }
-  const model = {formatUtc, formatPower, formatLimitReason, filterRows, counts, freshSnapshot, validSnapshot};
+  const model = {formatUtc, formatPower, formatLimitReason, filterRows, sortRows, counts, freshSnapshot, validSnapshot};
   if (typeof module !== 'undefined' && module.exports) module.exports = model;
   if (typeof document === 'undefined') return;
   const root = document.getElementById('dashboard');
@@ -74,6 +91,8 @@
   let stopped = false;
   let digest = '';
   const inputs = {q: el('search'), group: el('group-filter'), state: el('state-filter')};
+  const sorting = {key: '', direction: 'asc'};
+  const sortButtons = [...root.querySelectorAll('[data-sort-key]')];
   const readFilters = () => Object.fromEntries(Object.entries(inputs).map(([key, node]) => [key, node.value]));
   const panel = window.IngeconPanel;
   function node(tag, text, className) {
@@ -151,7 +170,7 @@
     el('connection-warning').textContent = !monitor.alive ?
       'Монітор неактивний або дані застарілі. Статуси показано як Unknown.' :
       'Частина результатів застаріла або ще не отримана; ці пристрої показано як Unknown.';
-    const rows = filterRows(current.inverters, readFilters());
+    const rows = sortRows(filterRows(current.inverters, readFilters()), sorting.key, sorting.direction);
     // Hidden/deleted devices are never retained in a command selection.
     const visible = new Set(rows.map(row => row.id));
     for (const id of selected) if (!visible.has(id)) selected.delete(id);
@@ -194,6 +213,32 @@
   el('filters').addEventListener('submit', event => { if (snapshot) { event.preventDefault(); filterChanged(); } });
   inputs.q.addEventListener('input', filterChanged);
   inputs.group.addEventListener('change', filterChanged); inputs.state.addEventListener('change', filterChanged);
+
+  function setSort(key, direction) {
+    if (key && !Object.prototype.hasOwnProperty.call(SORT_LABELS, key)) return;
+    sorting.key = key; sorting.direction = direction === 'desc' ? 'desc' : 'asc';
+    sortButtons.forEach(button => {
+      const active = button.dataset.sortKey === key;
+      button.closest('th').setAttribute('aria-sort', active ? (sorting.direction === 'asc' ? 'ascending' : 'descending') : 'none');
+      button.querySelector('[data-sort-indicator]').textContent = active ? (sorting.direction === 'asc' ? '↑' : '↓') : '↕';
+      const nextDirection = active && sorting.direction === 'asc' ? 'за спаданням' : 'за зростанням';
+      const label = 'Сортувати ' + nextDirection + ': ' + button.dataset.sortLabel;
+      button.setAttribute('aria-label', label); button.title = label;
+    });
+    if (el('sort-key')) el('sort-key').value = key;
+    if (el('sort-direction')) {
+      el('sort-direction').value = sorting.direction;
+      el('sort-direction').disabled = !key;
+    }
+    if (el('sort-status')) el('sort-status').textContent = key ?
+      'Сортування: ' + SORT_LABELS[key] + ', ' + (sorting.direction === 'asc' ? 'за зростанням.' : 'за спаданням.') :
+      'Сортування: за порядком додавання.';
+    render();
+  }
+  sortButtons.forEach(button => button.addEventListener('click', () => setSort(button.dataset.sortKey,
+    sorting.key === button.dataset.sortKey && sorting.direction === 'asc' ? 'desc' : 'asc')));
+  el('sort-key')?.addEventListener('change', () => setSort(el('sort-key').value, 'asc'));
+  el('sort-direction')?.addEventListener('change', () => setSort(sorting.key, el('sort-direction').value));
 
   function updateGroups() {
     const value = inputs.group.value;

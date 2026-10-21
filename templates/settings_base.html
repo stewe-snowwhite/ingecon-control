@@ -1,7 +1,8 @@
 {% extends 'base.html' %}
 {% block title %}Налаштування{% endblock %}
 {% block content %}
-<div class="page-heading"><div><p class="eyebrow">ПОРТАЛ</p><h1>Налаштування</h1></div></div>
+<div class="page-heading"><div><p class="eyebrow">ПОРТАЛ</p><h1>Налаштування</h1></div>
+{% if g.user.role == 'Administrator' and config.get('SETTINGS_AVAILABLE', False) and request.endpoint not in ('users_web.add', 'legacy_users.add') %}<a class="button primary" href="{{ url_for('users_web.add') }}">Додати користувача</a>{% endif %}</div>
 <nav class="settings-tabs" aria-label="Вкладки налаштувань">
 <a href="{{ url_for('telegram_web.settings') }}" {% if request.blueprint in ('telegram_web', 'legacy_telegram') %}aria-current="page"{% endif %}>Telegram</a>
 {% if g.user.role == 'Administrator' and config.get('SETTINGS_AVAILABLE', False) %}<a href="{{ url_for('users_web.index') }}" {% if request.blueprint in ('users_web', 'legacy_users') %}aria-current="page"{% endif %}>Користувачі</a>{% endif %}

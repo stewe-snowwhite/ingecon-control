@@ -121,6 +121,26 @@ def test_operations_visible_according_to_role(web, role):
             assert 'disabled' in button
 
 
+@pytest.mark.parametrize('role', ['Administrator', 'Operator', 'Viewer'])
+def test_sortable_headers_mobile_controls_and_single_add_entry(web, modbus, role):
+    module, client = web
+    seed(module)
+    set_role(module, role)
+    html = client.get('/').get_data(as_text=True)
+    markup = Markup(html)
+    buttons = markup.find('button', **{'class': 'table-sort'})
+    assert {button['data-sort-key'] for button in buttons} == {
+        'name', 'group', 'active_power_w', 'power_limit_percent'}
+    assert all(button['type'] == 'button' and 'name' not in button for button in buttons)
+    assert len(markup.find('th', **{'aria-sort': 'none', 'scope': 'col'})) == 4
+    assert markup.find('select', id='sort-key') and markup.find('select', id='sort-direction')
+    assert markup.find('p', id='sort-status', **{'aria-live': 'polite'})
+    # Keep the administrator's main navigation entry, remove the duplicate in Devices.
+    assert len(markup.find('a', href='/add')) == (1 if role == 'Administrator' else 0)
+    assert '+ Додати інвертор' not in html
+    assert modbus[1] == []
+
+
 def test_empty_and_stale_dashboard(web, modbus):
     module, client = web
     response = client.get('/api/statuses').json

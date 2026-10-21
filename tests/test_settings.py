@@ -27,6 +27,7 @@ def test_settings_entry_and_tabs_follow_role(web, role):
     assert ('href="/settings/users"' in tabs) == (role == 'Administrator')
     assert '<h1>Налаштування</h1>' in response.text
     assert client.get('/settings/users').status_code == (200 if role == 'Administrator' else 403)
+    assert ('href="/settings/users/add"' in response.text) == (role == 'Administrator')
 
 
 @pytest.mark.parametrize('path', ['/settings', '/settings/telegram', '/settings/users',
@@ -41,7 +42,8 @@ def test_user_forms_stay_in_settings_and_keep_csrf(web):
     response = client.get('/settings/users')
     tabs = navigation(response.text, 'Вкладки налаштувань')
     assert 'href="/settings/users" aria-current="page"' in tabs
-    assert 'href="/settings/users/add"' in response.text
+    assert response.text.count('href="/settings/users/add"') == 1
+    assert 'href="/settings/users/add"' not in client.get('/settings/users/add').text
     for path in ('/settings/telegram', '/settings/users/add', '/settings/users/1/delete'):
         assert client.post(path, data={}).status_code == 400
     response = post(client, '/settings/users/add', dict(username='new-viewer', role='Viewer',

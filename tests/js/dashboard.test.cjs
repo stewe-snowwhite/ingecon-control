@@ -65,6 +65,41 @@ test('combined search, group, state, Ukrainian names and empty results', () => {
   assert.equal(model.counts([]).total,0);
 });
 
+const sortSample = [
+  {id:1, name:'Інвертор 10', group:'Бета', active_power_w:100000, power_limit_percent:100},
+  {id:2, name:'Інвертор 2', group:'альфа', active_power_w:9000, power_limit_percent:9},
+  {id:3, name:'Інвертор 1', group:'Альфа', active_power_w:1000, power_limit_percent:10},
+  {id:4, name:'Інвертор 3', group:'Гамма', active_power_w:0, power_limit_percent:0},
+  {id:5, name:'Інвертор 4', group:'Бета', active_power_w:null, power_limit_percent:null},
+  {id:6, name:'Інвертор 5', group:'Бета', active_power_w:-20, power_limit_percent:50}
+];
+const sortCases = [
+  ['name', [3,2,4,5,6,1], [1,6,5,4,2,3]],
+  ['group', [2,3,1,5,6,4], [4,1,5,6,2,3]],
+  ['active_power_w', [6,4,3,2,1,5], [1,2,3,4,6,5]],
+  ['power_limit_percent', [4,2,3,6,1,5], [1,6,3,2,4,5]]
+];
+for (const [key, ascending, descending] of sortCases) {
+  test(`${key}: natural Ukrainian text or numeric sorting in both directions without mutating API data`, () => {
+    const before = JSON.stringify(sortSample);
+    assert.deepEqual(model.sortRows(sortSample, key, 'asc').map(row=>row.id), ascending);
+    assert.deepEqual(model.sortRows(sortSample, key, 'desc').map(row=>row.id), descending);
+    assert.equal(JSON.stringify(sortSample), before);
+  });
+}
+
+test('equal values have stable ID ordering; absent numeric values remain last in both directions', () => {
+  const rows = [{id:7,active_power_w:0},{id:2,active_power_w:0},
+    {id:9,active_power_w:null},{id:8,active_power_w:NaN},{id:6}];
+  for (const direction of ['asc','desc']) {
+    assert.deepEqual(model.sortRows(rows,'active_power_w',direction).map(row=>row.id), [2,7,6,8,9]);
+  }
+  for (const key of ['', 'ip_address', '__proto__', 'constructor']) {
+    assert.deepEqual(model.sortRows(sortSample,key), sortSample);
+  }
+  assert.deepEqual(model.sortRows(sortSample,'name','invalid'), sortSample);
+});
+
 test('UTC timestamps and malformed API responses', () => {
   assert.equal(model.formatUtc(0),'1970-01-01 00:00:00');
   assert.equal(model.formatUtc(null),'—');
@@ -114,12 +149,28 @@ class Element {
   querySelectorAll() { return []; }
   querySelector() { return null; }
 }
-function browserDouble(initiallyFail=false, reasonCode=1, includeCatalog=true) {
+function browserDouble(initiallyFail=false, reasonCode=1, includeCatalog=true, options={}) {
   const elements = new Map();
   const ids = ['dashboard','search','group-filter','state-filter','device-rows','filters','heartbeat','heartbeat-time',
     'monitor-detail','connection-warning','list-count','empty-list','api-warning','refresh-label','page-alert'];
   ids.forEach(id=>elements.set(id,new Element()));
-  elements.get('dashboard').dataset = {api:'/api/statuses',role:'Viewer',writes:'false'};
+  const sortButtons = new Map();
+  if (options.sortControls !== false) {
+    for (const id of ['sort-key','sort-direction','sort-status']) elements.set(id,new Element());
+    elements.get('sort-direction').value='asc'; elements.get('sort-direction').disabled=true;
+    for (const [key] of sortCases) {
+      const button = new Element('button'), header=new Element('th'), indicator=new Element('span');
+      button.dataset={sortKey:key,sortLabel:key}; header['aria-sort']='none';
+      button.closest=()=>header; button.querySelector=()=>indicator;
+      button.header=header; button.indicator=indicator; sortButtons.set(key,button);
+    }
+  }
+  elements.get('dashboard').querySelectorAll=()=>[...sortButtons.values()];
+  elements.get('dashboard').dataset = {api:'/api/statuses',role:options.role || 'Viewer',writes:'false'};
+  for (const id of ['selection-count','select-all']) elements.set(id,new Element());
+  elements.get('device-rows').querySelectorAll=selector=>selector==='input[name="selected_ids"]' ?
+    elements.get('device-rows').children.flatMap(row=>row.children).flatMap(cell=>cell.children)
+      .filter(element=>element.tag==='input' && element.name==='selected_ids') : [];
   if (includeCatalog) elements.get('dashboard').dataset.limitReasons = JSON.stringify(catalog);
   const countElements = ['total','Online','Offline','Degraded','Unknown'].map(key=>{
     const item = new Element(); item.dataset.count=key; item.textContent=(key==='total' || key==='Online') ? '1' : '0'; return item;
@@ -131,7 +182,7 @@ function browserDouble(initiallyFail=false, reasonCode=1, includeCatalog=true) {
     querySelectorAll:selector=>selector==='[data-count]' ? countElements : [],
     addEventListener:(key,fn)=>{listeners[key]=fn;}
   };
-  let fail = initiallyFail; let status = 200; let requests = 0; let elapsed = 0;
+  let fail = initiallyFail; let status = 200; let requests = 0; let elapsed = 0; let rowData=options.rows;
   const timers = new Map(); let nextId = 0;
   const context = vm.createContext({
     document, window:{IngeconPanel:{connected:true},history:{replaceState(){}},location:{pathname:'/'}},
@@ -139,16 +190,19 @@ function browserDouble(initiallyFail=false, reasonCode=1, includeCatalog=true) {
     AbortController, TypeError,
     fetch:async(url,options)=>{
       assert.equal(url,'/api/statuses'); assert.equal(options.credentials,'same-origin');
+      assert.equal(options.method,undefined); // Every request is a status GET, never a control POST.
       requests++; if (fail) throw new TypeError('simulated connection loss');
       return {status,ok:status===200,json:async()=>{
-        const data=sample(); data.inverters[0].limit_reason_code=reasonCode; return data;
+        const data=sample(); data.inverters[0].limit_reason_code=reasonCode;
+        if (rowData) data.inverters=rowData.map(row=>({...data.inverters[0],...row}));
+        return data;
       }};
     },
     setTimeout:(fn,ms)=>{const id=++nextId;timers.set(id,{fn,ms});return id;},
     clearTimeout:id=>timers.delete(id), setInterval:fn=>{context.tick=fn;}
   });
   vm.runInContext(fs.readFileSync('static/dashboard.js','utf8'),context);
-  return {elements,document,listeners,timers,countElements,context,
+  return {elements,document,listeners,timers,countElements,context,sortButtons,setRows:rows=>{rowData=rows;},
     fail:()=>{fail=true;}, recover:()=>{fail=false;}, expire:()=>{elapsed=100000;},
     deny:()=>{status=401;}, requests:()=>requests};
 }
@@ -158,6 +212,80 @@ async function nextPoll(browser) {
   assert.ok(entry,'next poll scheduled');
   browser.timers.delete(entry[0]); entry[1].fn(); await settle();
 }
+
+function renderedIds(browser) {
+  return browser.elements.get('device-rows').children.map(row=>Number(row.dataset.id));
+}
+
+for (const [key, ascending, descending] of sortCases) {
+  test(`${key}: actual header clicks toggle order and preserve it through polling`, async () => {
+    const browser=browserDouble(false,1,true,{rows:sortSample}); await settle();
+    const button=browser.sortButtons.get(key);
+    button.listeners.click();
+    assert.deepEqual(renderedIds(browser),ascending);
+    assert.equal(button.header['aria-sort'],'ascending');
+    assert.equal(button.indicator.textContent,'↑');
+    assert.equal(browser.elements.get('sort-key').value,key);
+    assert.equal(browser.elements.get('sort-direction').value,'asc');
+    button.listeners.click();
+    assert.deepEqual(renderedIds(browser),descending);
+    assert.equal(button.header['aria-sort'],'descending');
+    assert.equal(button.indicator.textContent,'↓');
+    assert.equal(browser.elements.get('sort-direction').value,'desc');
+    assert.equal(browser.requests(),1); // Changing order is local and never submits the control form.
+    await nextPoll(browser);
+    assert.deepEqual(renderedIds(browser),descending);
+    assert.equal(browser.requests(),2);
+  });
+}
+
+test('mobile sorting, filtering, live values, expiry and reset use the same ordering', async () => {
+  const browser=browserDouble(false,1,true,{rows:sortSample}); await settle();
+  const key=browser.elements.get('sort-key'), direction=browser.elements.get('sort-direction');
+  key.value='active_power_w'; key.listeners.change();
+  assert.deepEqual(renderedIds(browser),[6,4,3,2,1,5]);
+  assert.equal(direction.disabled,false);
+  browser.elements.get('group-filter').value='Бета';
+  browser.elements.get('group-filter').listeners.change();
+  assert.deepEqual(renderedIds(browser),[6,1,5]);
+  direction.value='desc'; direction.listeners.change();
+  assert.deepEqual(renderedIds(browser),[1,6,5]);
+  assert.equal(browser.sortButtons.get('active_power_w').header['aria-sort'],'descending');
+  browser.setRows(sortSample.map(row=>row.id===6 ? {...row,active_power_w:200000} : row));
+  await nextPoll(browser);
+  assert.deepEqual(renderedIds(browser),[6,1,5]);
+  browser.expire(); browser.context.tick();
+  assert.deepEqual(renderedIds(browser),[1,5,6]); // Stale numeric values are now all absent.
+  browser.recover(); await nextPoll(browser);
+  assert.deepEqual(renderedIds(browser),[6,1,5]);
+  browser.elements.get('group-filter').value='';
+  browser.elements.get('group-filter').listeners.change();
+  key.value=''; key.listeners.change();
+  assert.deepEqual(renderedIds(browser),[1,2,3,4,5,6]);
+  assert.equal(direction.disabled,true);
+  for (const button of browser.sortButtons.values()) assert.equal(button.header['aria-sort'],'none');
+});
+
+test('sorting preserves selection by inverter ID, not its visible row position', async () => {
+  const browser=browserDouble(false,1,true,{rows:sortSample,role:'Operator'}); await settle();
+  const body=browser.elements.get('device-rows');
+  const checkbox=body.querySelectorAll('input[name="selected_ids"]').find(node=>node.value==='2');
+  checkbox.checked=true; body.listeners.change({target:checkbox});
+  browser.sortButtons.get('name').listeners.click();
+  browser.sortButtons.get('active_power_w').listeners.click();
+  await nextPoll(browser);
+  const selected=body.querySelectorAll('input[name="selected_ids"]').filter(node=>node.checked);
+  assert.deepEqual(selected.map(node=>node.value),['2']);
+  assert.equal(browser.elements.get('selection-count').textContent,'Обрано: 1');
+});
+
+test('polling remains compatible with cached HTML without sorting controls', async () => {
+  const browser=browserDouble(false,1,true,{sortControls:false}); await settle();
+  assert.equal(browser.requests(),1);
+  assert.equal(browser.context.window.IngeconPanel.connected,true);
+  await nextPoll(browser);
+  assert.equal(browser.requests(),2);
+});
 
 for (const [code, label] of reasonLabels.entries()) {
   test(`polling renders reason ${code} with the shared hover hint and numeric code`, async () => {
