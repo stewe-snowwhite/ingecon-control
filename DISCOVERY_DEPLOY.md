@@ -1,6 +1,6 @@
 # Production release: Inverter Discovery
 
-Цей сценарій застосовується до наявного `/opt/ingecon-control`, гілки `feature/modernization` і production SQLite `instance/production/ingecon.sqlite`. Він не запускає сканувань, не погоджує CIDR автоматично, не змінює керування, firewall, маршрути, SSH, Tailscale або Nginx. Фізичні Modbus-записи залишаються заблокованими. Правило commit/push/release-tag постійно закріплено в [AGENTS.md](AGENTS.md).
+Цей сценарій застосовується до наявного `/opt/ingecon-control`, єдиної робочої гілки `main` і production SQLite `instance/production/ingecon.sqlite`. Він не запускає сканувань, не погоджує CIDR автоматично, не змінює керування, firewall, маршрути, SSH, Tailscale або Nginx. Фізичні Modbus-записи залишаються заблокованими. Правило commit/push/release-tag постійно закріплено в [AGENTS.md](AGENTS.md).
 
 ## Передумови й початковий стан
 
@@ -23,16 +23,16 @@ systemd-analyze verify deploy/systemd/ingecon-web.service deploy/systemd/ingecon
 git diff --check
 ```
 
-Усі зміни мають бути закомічені перед наступними командами. Не додавати runtime-файли, резервні копії та секрети. Не робити merge у main або force push.
+Усі зміни мають бути закомічені в `main` перед наступними командами. Не додавати runtime-файли, резервні копії та секрети. Не створювати інших робочих гілок і не виконувати force push. `--previous-sha` має вказувати на попередню перевірену версію на диску; у наведеному прикладі це стан перед виправленням release-скриптів для `main`.
 
 ```bash
-git push -u origin feature/modernization
+git push origin main
 .venv/bin/python -m deploy.discovery_release prepare \
   --expected-sha "$(git rev-parse HEAD)" \
-  --previous-sha c5583b2f309389210405466d352011918da211c2
+  --previous-sha d9031dea09448e29e960bb7b9ef83edcdb2aa0fa
 ```
 
-Helper повторно перевіряє clean Git, SHA й відповідність GitHub-гілці. Він вимагає не менше 256 MiB вільного місця або восьми розмірів БД, залежно від того, що більше. Потім:
+Helper повторно перевіряє clean Git, поточну гілку `main`, SHA й відповідність GitHub `refs/heads/main`. Він вимагає не менше 256 MiB вільного місця або восьми розмірів БД, залежно від того, що більше. Потім:
 
 - Online SQLite backup у новий приватний каталог `instance/production/backups/discovery-<UTC>-<id>/production.sqlite`.
 - Відновлення **в окремий новий** `restore-verified.sqlite`, `integrity_check` і потокове порівняння SQL dump. Робоча БД не перезаписується.
@@ -75,7 +75,7 @@ bash /opt/ingecon-control/deploy/activate_discovery.sh /opt/ingecon-control/inst
 ```bash
 git tag -a production-discovery-YYYYMMDDTHHMMSSZ -m 'Production inverter discovery: validated HTTP, monitor, Telegram and idle discovery worker' <перевірений-SHA>
 git push origin refs/tags/production-discovery-YYYYMMDDTHHMMSSZ
-git ls-remote origin refs/heads/feature/modernization 'refs/tags/production-discovery-YYYYMMDDTHHMMSSZ*'
+git ls-remote origin refs/heads/main 'refs/tags/production-discovery-YYYYMMDDTHHMMSSZ*'
 ```
 
 Не створювати production-тег для підготовленого, але не активованого або невдалого розгортання. Звіт повинен містити гілку, повний SHA, тег або причину його відсутності, push result, backup path, міграції, стани служб і факт відкату. Після успішного запуску система лишається працювати; адміністратор сам погоджує CIDR і запускає пошук зі сторінки «Додати інвертор».

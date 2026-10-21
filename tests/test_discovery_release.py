@@ -45,8 +45,11 @@ def snapshot(tmp_path, monkeypatch):
     token.parent.mkdir(); token.write_text('synthetic-token-only')
     def git(*args, **kwargs):
         if args == ('status','--porcelain'): return ''
+        if args == ('branch','--show-current'): return 'main'
         if args == ('rev-parse','HEAD'): return SHA
-        if args[0] == 'ls-remote': return SHA+'\trefs/heads/feature/modernization'
+        if args[0] == 'ls-remote':
+            assert args == ('ls-remote','origin','refs/heads/main')
+            return SHA+'\trefs/heads/main'
         if args[0] == 'rev-parse': return PREVIOUS
         raise AssertionError(args)
     monkeypatch.setattr(release, 'git', git)
@@ -80,13 +83,14 @@ def test_prepare_private_backups_and_source_snapshot_only(snapshot):
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize('reason', ['dirty','unpublished','wrong_sha','no_space'])
+@pytest.mark.parametrize('reason', ['dirty','unpublished','wrong_sha','wrong_branch','no_space'])
 def test_prepare_refuses_before_production_changes(snapshot, monkeypatch, reason):
     root, _ = snapshot
     original_git = release.git
     def git(*args, **kwargs):
         if args == ('status','--porcelain') and reason == 'dirty': return ' M app.py'
-        if args[0] == 'ls-remote' and reason == 'unpublished': return PREVIOUS+'\trefs/heads/feature/modernization'
+        if args == ('branch','--show-current') and reason == 'wrong_branch': return 'unapproved-branch'
+        if args[0] == 'ls-remote' and reason == 'unpublished': return PREVIOUS+'\trefs/heads/main'
         return original_git(*args, **kwargs)
     monkeypatch.setattr(release, 'git', git)
     if reason == 'no_space':
@@ -120,6 +124,9 @@ def test_units_nonroot_single_worker_and_no_schedules():
 
 def test_activation_traps_failures_and_preserves_working_data():
     text = (ROOT/'deploy/activate_discovery.sh').read_text()
+    assert 'git branch --show-current) == main' in text
+    assert 'git ls-remote origin refs/heads/main' in text
+    assert 'refs/heads/feature/modernization' not in text
     assert 'trap rollback ERR INT TERM' in text
     assert text.index('-m discovery_schema') < text.index('systemctl restart ingecon-web\n# Readiness')
     assert 'git reset' not in text and '--force' not in text

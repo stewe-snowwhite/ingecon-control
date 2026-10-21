@@ -49,9 +49,11 @@ def check_copy(source, destination):
 def prepare(expected, previous, root=ROOT):
     if git('status', '--porcelain', root=root):
         raise ValueError('Commit/push all changes before preparing a production release')
+    if git('branch', '--show-current', root=root) != 'main':
+        raise ValueError('Production releases must use the main branch')
     if git('rev-parse', 'HEAD', root=root) != expected:
         raise ValueError('HEAD does not match the intended release')
-    remote = git('ls-remote', 'origin', 'refs/heads/feature/modernization', root=root).split()
+    remote = git('ls-remote', 'origin', 'refs/heads/main', root=root).split()
     if not remote or remote[0] != expected:
         raise ValueError('Exact release is not available on GitHub')
     previous = git('rev-parse', previous+'^{commit}', root=root)

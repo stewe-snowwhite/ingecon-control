@@ -32,9 +32,10 @@ previous=${fields[1]}
 backup=${fields[2]}
 source_snapshot=${fields[3]}
 app() { /usr/sbin/runuser -u codex -- "$@"; }
+[[ $(app git branch --show-current) == main ]]
 [[ $(app git rev-parse HEAD) == "$expected" ]]
 [[ -z $(app git status --porcelain) ]]
-remote=$(app git ls-remote origin refs/heads/feature/modernization)
+remote=$(app git ls-remote origin refs/heads/main)
 [[ ${remote%%$'\t'*} == "$expected" ]]
 # Validate the backup by restoring to a fresh private file; no production overwrite.
 app .venv/bin/python - "$manifest" <<'PY'
