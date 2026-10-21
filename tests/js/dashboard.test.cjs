@@ -12,7 +12,9 @@ function sample() {
     inverters: [{
       id: 1, name: 'Сонце <img src=x>', group: 'A', ip_address: '192.0.2.1',
       state: 'Online', recorded_state: 'Online', stale: false, checked_at: 980, last_success_at: 980,
-      latency_ms: 4, power_limit_percent: 50, checks: {icmp: {ok: false}, tcp: {ok: true}, modbus: {ok: true}}
+      latency_ms: 4, power_limit_percent: 50, checks: {icmp: {ok: false}, tcp: {ok: true}, modbus: {ok: true}},
+      operating_state_code: 2, operating_state_label: 'Підключений до мережі',
+      active_power_raw: 6298, active_power_w: 62980, limit_reason_code: 1
     }]
   };
 }
@@ -31,6 +33,9 @@ test('staleness expires during an API outage, without mutating the cached snapsh
   assert.equal(result.inverters[0].state, 'Unknown');
   assert.equal(result.inverters[0].checks.modbus.ok, null);
   assert.equal(result.inverters[0].power_limit_percent, null);
+  for (const key of ['operating_state_code','operating_state_label','active_power_raw','active_power_w','limit_reason_code']) {
+    assert.equal(result.inverters[0][key], null);
+  }
   assert.equal(original.inverters[0].state, 'Online');
 });
 
@@ -64,6 +69,13 @@ test('UTC timestamps and malformed API responses', () => {
   for (const data of [null, {}, {...sample(),generated_at:NaN}, {...sample(),inverters:[{}]}]) {
     assert.ok(!model.validSnapshot(data));
   }
+});
+
+test('power uses watts with explicit kW display, including zero and reverse flow', () => {
+  assert.equal(model.formatPower(62980), '62,98 кВт');
+  assert.equal(model.formatPower(0), '0,00 кВт');
+  assert.equal(model.formatPower(-20), '-0,02 кВт');
+  assert.equal(model.formatPower(null), '—');
 });
 
 // A small DOM double exercises the actual polling script. No browser, server or network is used.
@@ -124,6 +136,9 @@ test('actual polling updates HTML safely, reports outage, expires old samples an
   assert.equal(browser.countElements[1].textContent,1);
   const row = browser.elements.get('device-rows').children[0];
   assert.equal(row.children[0].children[0].textContent,'Сонце <img src=x>'); // text, not parsed HTML.
+  assert.equal(row.children[5].children[0].textContent,'Підключений до мережі');
+  assert.equal(row.children[6].textContent,'62,98 кВт');
+  assert.equal(row.children[8].textContent,'Код: 1');
   browser.fail(); await nextPoll(browser);
   assert.equal(browser.context.window.IngeconPanel.connected,false);
   assert.equal(browser.elements.get('api-warning').hidden,false);

@@ -44,3 +44,20 @@ INPUT_REGISTERS = (
     InputRegister(54, 'Тип завдання реактивної потужності'),
 )
 INPUT_BLOCKS = ((20, 16), (52, 3))
+
+
+def operating_state_label(code):
+    if code is None:
+        return None
+    return 'Підключений до мережі' if code == 2 else f'Код стану {code}'
+
+
+def telemetry(values):
+    """Decode exactly the two complete FC04 blocks; keep raw power for audit."""
+    if len(values) != 19 or any(type(v) is not int or not 0 <= v <= 65535 for v in values):
+        raise ValueError('Expected complete Input Registers 20–35 and 52–54')
+    power = values[9] - 65536 if values[9] >= 32768 else values[9]
+    return dict(operating_state_code=None if values[0] == 65535 else values[0],
+                active_power_raw=values[9], active_power_w=power * 10,
+                power_limit_percent=values[16] if 0 <= values[16] <= 100 else None,
+                limit_reason_code=None if values[17] == 65535 else values[17])

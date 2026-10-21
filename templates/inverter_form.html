@@ -5,6 +5,7 @@
 <label for="group_input">Група<input id="group_input" name="group" list="group-options" required maxlength="100" value="{{ inverter.group if inverter is defined else '' }}" placeholder="Виберіть наявну або введіть нову групу"></label>
 <datalist id="group-options">{% for group in groups %}<option value="{{ group }}">{% endfor %}</datalist>
 <label for="ip">IP-адреса<input id="ip" name="ip" required maxlength="100" value="{{ inverter.ip_address if inverter is defined else '' }}" autocomplete="off"></label>
+{% if config.get('MODEL_SELECTION_AVAILABLE', false) %}{% include 'inverter_model_field.html' %}{% endif %}
 {% if transport is defined %}<label for="port">Порт<input id="port" name="port" type="number" min="1" max="65535" required value="{{ transport.port }}"></label><label for="device_id">Unit ID<input id="device_id" name="device_id" type="number" min="1" max="247" required value="{{ transport.device_id }}"></label>{% endif %}
 <label for="login">Логін інвертора<input id="login" name="login" maxlength="100" value="{{ (inverter.login or '') if inverter is defined else '' }}" autocomplete="off"></label>
 <label for="password">Новий пароль інвертора<input id="password" name="password" type="password" maxlength="100" autocomplete="new-password" placeholder="{{ 'Залиште порожнім, щоб зберегти поточний' if inverter is defined else 'За потреби' }}"></label>

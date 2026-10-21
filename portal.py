@@ -28,6 +28,10 @@ def validate_database(uri):
             raise ValueError
         with sqlite3.connect(path.as_uri()+'?mode=ro', uri=True) as connection:
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            from telemetry_schema import COLUMNS
+            if any(not set(columns) <= {r[1] for r in connection.execute('PRAGMA table_info('+table+')')}
+                   for table, columns in COLUMNS.items()):
+                raise ValueError
         if 'demo_metadata' in tables or not (set(db.metadata.tables)-{table.name for table in DISCOVERY_TABLES}) <= tables:
             raise ValueError
     except (ArgumentError, TypeError, ValueError, sqlite3.Error):

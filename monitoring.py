@@ -15,7 +15,7 @@ from sqlalchemy import select, update
 import modbus_utils
 from models import Inverter, InverterStatus, MonitorConfig, MonitorHeartbeat, StateEvent
 from operation_locks import OperationBusy, endpoint_key, resource_lock
-from input_registers import INPUT_BLOCKS
+from input_registers import INPUT_BLOCKS, telemetry, operating_state_label
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,10 @@ class Target:
 
 
 def target_for(inverter, config):
+    if getattr(inverter, 'model', None) == 'ingecon_sun_100tl':
+        return Target(inverter.id, inverter.ip_address,
+                      config.port if config else 502, config.device_id if config else 1,
+                      *INPUT_BLOCKS[0], 'ingecon_100tl_input')
     if config is None:
         return Target(inverter.id, inverter.ip_address)
     return Target(inverter.id, inverter.ip_address, config.port, config.device_id,
@@ -228,10 +232,11 @@ def apply_observation(session, inverter, observation, stale_after):
         if name != 'modbus':
             setattr(status, name+'_latency_ms', result.latency_ms)
     status.power_limit_percent = None
+    for field in ('operating_state_code', 'active_power_raw', 'active_power_w', 'limit_reason_code'):
+        setattr(status, field, None)
     if target.profile == 'ingecon_100tl_input' and observation.modbus.ok:
-        values = observation.modbus.registers
-        if len(values) == 19 and 0 <= values[16] <= 100:
-            status.power_limit_percent = values[16]
+        for field, value in telemetry(observation.modbus.registers).items():
+            setattr(status, field, value)
     if target.profile == 'legacy_ingeteam' and observation.modbus.ok:
         cmd, limit = observation.modbus.registers
         if cmd == 16 and 0 <= limit <= 32767:
@@ -283,6 +288,12 @@ def current_statuses(session, *, group=None, now=None, stale_after=None):
                       'last_success_at': status.last_success_at if same_target else None,
                       'latency_ms': status.latency_ms if fresh else None, 'reason': reason,
                       'power_limit_percent': status.power_limit_percent if fresh else None,
+                      'model': inv.model,
+                      'operating_state_code': status.operating_state_code if fresh else None,
+                      'operating_state_label': operating_state_label(status.operating_state_code) if fresh else None,
+                      'active_power_raw': status.active_power_raw if fresh else None,
+                      'active_power_w': status.active_power_w if fresh else None,
+                      'limit_reason_code': status.limit_reason_code if fresh else None,
                       'checks': {name: {'ok': getattr(status, name+'_ok') if fresh else None,
                                        'latency_ms': (getattr(status, name+'_latency_ms') if name != 'modbus' else status.latency_ms) if fresh else None,
                                        'error': getattr(status, name+'_error') if fresh else None}

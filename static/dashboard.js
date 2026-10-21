@@ -16,6 +16,9 @@
     rows.forEach(row => result[STATES.includes(row.state) ? row.state : 'Unknown']++);
     return result;
   }
+  function formatPower(watts) {
+    return Number.isFinite(watts) ? (watts / 1000).toFixed(2).replace('.', ',') + ' кВт' : '—';
+  }
   function freshSnapshot(snapshot, now) {
     const monitor = {...snapshot.monitor};
     const ttl = monitor.stale_after_seconds;
@@ -25,6 +28,8 @@
       const age = now - row.checked_at;
       if (monitor.alive && !row.stale && row.checked_at !== null && age >= 0 && age <= ttl) return row;
       return {...row, state: 'Unknown', stale: true, latency_ms: null, power_limit_percent: null,
+        operating_state_code: null, operating_state_label: null, active_power_raw: null,
+        active_power_w: null, limit_reason_code: null,
         reason_text: monitor.alive ? 'Дані перевірки застарілі.' : 'Немає актуального heartbeat монітора.',
         checks: {icmp: {ok: null}, tcp: {ok: null}, modbus: {ok: null}}};
     });
@@ -43,7 +48,7 @@
         ['icmp', 'tcp', 'modbus'].every(key => row.checks[key] &&
           [true, false, null].includes(row.checks[key].ok)));
   }
-  const model = {formatUtc, filterRows, counts, freshSnapshot, validSnapshot};
+  const model = {formatUtc, formatPower, filterRows, counts, freshSnapshot, validSnapshot};
   if (typeof module !== 'undefined' && module.exports) module.exports = model;
   if (typeof document === 'undefined') return;
   const root = document.getElementById('dashboard');
@@ -84,7 +89,7 @@
     if (role === 'Administrator') name.href = '/edit/' + row.id;
     device.append(name, node('small', row.ip_address, 'mono'));
     const group = cell('Група'); group.append(node('span', row.group, 'group-tag'));
-    const status = cell('Стан'); status.append(node('span', row.state, 'badge ' + row.state.toLowerCase()));
+    const status = cell('Доступність'); status.append(node('span', row.state, 'badge ' + row.state.toLowerCase()));
     if (row.stale) status.append(node('small', 'Застарілі дані', 'muted'));
     if (row.check_requested) status.append(node('small', 'Перевірку заплановано', 'muted'));
     if (row.reason_text) status.append(node('small', row.reason_text, 'muted'));
@@ -99,8 +104,14 @@
     const checked = cell('Час (UTC)');
     checked.append(node('span', formatUtc(row.checked_at), 'mono'),
       node('small', 'Остання успішна (UTC): ' + formatUtc(row.last_success_at), 'muted'));
-    const limit = cell('Ліміт'); limit.textContent = row.power_limit_percent === null ? '—' : row.power_limit_percent + '%';
-    tr.append(device, group, status, checks, checked, limit);
+    const operating = cell('Робочий стан'); operating.dataset.telemetry = '';
+    operating.append(node('span', row.operating_state_label ?? '—'));
+    if (row.operating_state_code != null) operating.append(node('small', 'Код: ' + row.operating_state_code, 'muted'));
+    const power = cell('Активна потужність'); power.dataset.telemetry = ''; power.textContent = formatPower(row.active_power_w);
+    const limit = cell('Ліміт'); limit.dataset.telemetry = ''; limit.textContent = row.power_limit_percent == null ? '—' : row.power_limit_percent + '%';
+    const reason = cell('Причина обмеження'); reason.dataset.telemetry = '';
+    reason.textContent = row.limit_reason_code == null ? '—' : 'Код: ' + row.limit_reason_code;
+    tr.append(device, group, status, checks, checked, operating, power, limit, reason);
     return tr;
   }
 
@@ -199,6 +210,7 @@
       probe.textContent = probe.textContent.split(' ')[0] + ' —'; probe.className = 'probe unavailable';
     });
     el('device-rows').querySelectorAll('td[data-label="Ліміт"]').forEach(cell => { cell.textContent = '—'; });
+    el('device-rows').querySelectorAll('[data-telemetry]').forEach(cell => { cell.textContent = '—'; });
   }
   async function refresh() {
     if (document.hidden || stopped) return;

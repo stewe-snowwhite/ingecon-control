@@ -12,7 +12,7 @@ from flask.helpers import get_debug_flag
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.exceptions import HTTPException, SecurityError
 
-from models import db, Inverter, ROLES, User, MonitorConfig, InverterStatus, StateEvent
+from models import db, Inverter, ROLES, User, MonitorConfig, InverterStatus, StateEvent, INVERTER_MODELS
 from dashboard import (ACTIONS, STATES, command_payload, dashboard_snapshot, date_filter,
                        filters, sign_confirmation, verify_confirmation)
 from monitoring import current_statuses, Target, explain_reason
@@ -71,6 +71,7 @@ def create_app(config=None):
     app.register_blueprint(discovery_web)
     app.config['DISCOVERY_AVAILABLE'] = True
     app.config['MODBUS_TOOLS_AVAILABLE'] = True
+    app.config['MODEL_SELECTION_AVAILABLE'] = True
     # Keep existing form/bookmark URLs protected by the same handlers.
     app.register_blueprint(telegram_web, url_prefix='/telegram', name='legacy_telegram')
     app.register_blueprint(users_web, url_prefix='/users', name='legacy_users')
@@ -233,8 +234,8 @@ def create_app(config=None):
             db.session.execute(db.delete(model).where(model.inverter_id == inverter.id))
         db.session.delete(inverter)
 
-    def inverter_fields():
-        if any(len(request.form.getlist(key)) > 1 for key in ('name', 'group', 'ip', 'login', 'password')):
+    def inverter_fields(existing=None):
+        if any(len(request.form.getlist(key)) > 1 for key in ('name', 'group', 'ip', 'login', 'password', 'model')):
             abort(400, 'Неоднозначні поля інвертора.')
         fields = {key: request.form.get(key, '').strip() for key in ('name', 'group', 'ip', 'login')}
         if any(not fields[key] or len(fields[key]) > 100 for key in ('name', 'group', 'ip')):
@@ -246,9 +247,12 @@ def create_app(config=None):
         except ValueError:
             abort(400, 'Некоректна адреса інвертора.')
         password = request.form.get('password', '')
+        model = request.form.get('model', existing.model if existing else 'unknown')
+        if model not in INVERTER_MODELS:
+            abort(400, 'Невідома модель інвертора.')
         if len(fields['login']) > 100 or len(password) > 100:
             abort(400, 'Завеликі облікові дані інвертора.')
-        return dict(name=fields['name'], group=fields['group'], ip_address=str(address),
+        return dict(name=fields['name'], group=fields['group'], ip_address=str(address), model=model,
                     login=fields['login'], password=password)
 
     def transport_fields(existing=None):
@@ -279,12 +283,12 @@ def create_app(config=None):
                     inverter = Inverter(**fields)
                     db.session.add(inverter)
                     db.session.flush()
-                    # Explicit transport, no read profile automatically trusted.
+                    # Explicit model selects the shared confirmed read profile.
                     db.session.add(MonitorConfig(inverter_id=inverter.id, **transport))
                     db.session.commit()
             except OperationBusy:
                 abort(409, 'Облік пристроїв зайнятий. Повторіть запит.')
-            flash('Інвертор додано без перевірки підключення. Профіль моніторингу налаштовується окремо.', 'info')
+            flash('Інвертор додано без перевірки підключення. Для INGECON SUN 100TL профіль FC04 обирається за моделлю.', 'info')
             return redirect(url_for('index'))
         defaults = load_configuration()
         candidate = None
@@ -302,7 +306,7 @@ def create_app(config=None):
         inverter = db.get_or_404(Inverter, inverter_id)
         config = db.session.get(MonitorConfig, inverter_id)
         if request.method == 'POST':
-            fields, transport = inverter_fields(), transport_fields(config)
+            fields, transport = inverter_fields(inverter), transport_fields(config)
             try:
                 with resource_lock('inverter-inventory'):
                     check_duplicate(fields, transport, exclude=inverter.id)
@@ -420,6 +424,8 @@ def create_app(config=None):
         inverter = db.session.get(Inverter, inverter_id)
         if inverter is None:
             raise click.ClickException('Інвертор не знайдено.')
+        if inverter.model == 'ingecon_sun_100tl' and profile != 'ingecon_100tl_input':
+            raise click.ClickException('Для INGECON SUN 100TL використовується спільний профіль ingecon_100tl_input.')
         target = Target(inverter_id, inverter.ip_address, port, device_id, read_address, read_count, profile)
         try:
             target.validate()
@@ -431,6 +437,8 @@ def create_app(config=None):
             db.session.add(config)
         for field in ('port', 'device_id', 'read_address', 'read_count', 'profile'):
             setattr(config, field, getattr(target, field))
+        if profile == 'ingecon_100tl_input':
+            inverter.model = 'ingecon_sun_100tl'
         db.session.commit()
         click.echo('Профіль читання збережено без підключення до інвертора.')
 

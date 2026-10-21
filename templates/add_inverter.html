@@ -34,6 +34,7 @@
 <label for="name">Назва<input id="name" name="name" required maxlength="100" value=""></label>
 <label for="group_input">Група<input id="group_input" name="group" list="group-options" required maxlength="100"></label><datalist id="group-options">{% for group in groups %}<option value="{{ group }}">{% endfor %}</datalist>
 <label for="ip">IP<input id="ip" name="ip" required maxlength="100" value="{{ candidate.ip if candidate else '' }}"></label>
+{% if config.get('MODEL_SELECTION_AVAILABLE', false) %}{% include 'inverter_model_field.html' %}{% endif %}
 <label for="port">Порт<input id="port" name="port" type="number" min="1" max="65535" required value="{{ candidate.port if candidate else (defaults.port if defaults is defined else 502) }}"></label>
 <label for="device_id">Unit ID<input id="device_id" name="device_id" type="number" min="1" max="247" required value="{{ candidate.device_id if candidate else (defaults.device_id if defaults is defined else 1) }}"></label>
 <label for="login">Логін інвертора<input id="login" name="login" maxlength="100" autocomplete="off"></label>

@@ -6,6 +6,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 db = SQLAlchemy()
 ROLES = ('Administrator', 'Operator', 'Viewer')
+INVERTER_MODELS = ('unknown', 'ingecon_sun_100tl')
 
 
 class Inverter(db.Model):
@@ -13,6 +14,7 @@ class Inverter(db.Model):
     name = db.Column(db.String(100), nullable=False)
     group = db.Column(db.String(100), nullable=False)
     ip_address = db.Column(db.String(100), nullable=False)
+    model = db.Column(db.String(32), nullable=False, default='unknown', server_default='unknown')
     login = db.Column(db.String(100), nullable=True)
     password = db.Column(db.String(100), nullable=True)
 
@@ -75,6 +77,10 @@ class InverterStatus(db.Model):
     tcp_error = db.Column(db.String(64), nullable=True)
     modbus_error = db.Column(db.String(64), nullable=True)
     power_limit_percent = db.Column(db.Float, nullable=True)
+    operating_state_code = db.Column(db.Integer, nullable=True)
+    active_power_raw = db.Column(db.Integer, nullable=True)
+    active_power_w = db.Column(db.Integer, nullable=True)
+    limit_reason_code = db.Column(db.Integer, nullable=True)
     __table_args__ = (db.CheckConstraint("state IN ('Online', 'Offline', 'Degraded', 'Unknown')"),)
 
 

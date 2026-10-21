@@ -128,6 +128,9 @@ class MonitorWorker:
         required = {'inverter', 'monitor_config', 'inverter_status', 'state_event', 'monitor_heartbeat'}
         if not required <= existing:
             raise RuntimeError('Monitoring schema missing; back up the DB and initialize it explicitly.')
+        from telemetry_schema import ready
+        if not ready(self.engine):
+            raise RuntimeError('Telemetry columns missing; run the backed-up migration before restarting.')
 
 
 def database_url(uri):
