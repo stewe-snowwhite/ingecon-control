@@ -1,7 +1,7 @@
 {% extends 'settings_base.html' %}{% block title %}Налаштування · Modbus{% endblock %}
 {% block settings_content %}
 <section class="surface"><h2>Глобальна конфігурація Modbus · INGECON SUN 100TL</h2>
-<p class="notice warning">Історичні Holding-команди непідтверджені. Фізичний запис заблоковано на backend незалежно від форми, Telegram або змінних середовища.</p>
+<p class="notice warning">Це історична редагована карта; її довільні записи залишаються заблокованими. Окремий тестовий профіль 3Play використовує фіксовані HR1000/HR1001. Збереження цієї форми не вмикає керування і не змінює активну карту команд.</p>
 <p>Одна конфігурація для всіх інверторів. Адреси — нульові адреси протоколу, без автоматичного зсуву. Межі ліміту незмінні: 1–100 %.</p>
 <form method="POST" class="stacked-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <input type="hidden" name="config_fingerprint" value="{{ config_fingerprint }}">

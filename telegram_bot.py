@@ -23,6 +23,7 @@ from operation_locks import resource_lock
 from telegram_store import TelegramStore
 from telegram_control import load_control_policy
 import modbus_safety
+import inverter_controls
 from telegram_ui import build_dispatcher, notification_loop
 
 BASE_TABLES = {'user','inverter','inverter_status','monitor_config','monitor_heartbeat','state_event'}
@@ -138,6 +139,9 @@ def main(argv=None):
     try:
         if args.command=='check-control-config':
             policy = load_control_policy(args.file)
+            if inverter_controls.enabled():
+                print('Конфігурація перевірена без мережі. Увімкнено окремий тестовий профіль 3Play; історична JSON-карта не виконується.')
+                return
             print('Конфігурація перевірена без мережі. Керування: '+
                   ('заблоковано на backend' if modbus_safety.writes_locked() else 'увімкнено' if policy.enabled else 'вимкнено')+
                   f'; пристроїв у політиці: {len(policy.targets)}.')
@@ -153,7 +157,7 @@ def main(argv=None):
             handler.addFilter(TokenRedactor(token))
         engine = open_engine(args.database)
         check_schema(engine)  # No schema changes or Telegram API calls on an unprepared DB.
-        disable_device_transports(allow_control=policy.enabled and not modbus_safety.writes_locked())
+        disable_device_transports(allow_control=policy.enabled and (inverter_controls.enabled() or not modbus_safety.writes_locked()))
         with resource_lock('telegram-db:'+str(Path(args.database).resolve())), resource_lock('telegram-bot:'+token.split(':')[0]):
             asyncio.run(run_polling(TelegramStore(engine,control_policy=policy),token))
     except KeyboardInterrupt:

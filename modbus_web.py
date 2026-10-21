@@ -17,6 +17,8 @@ from register_tools import FUNCTIONS, RegisterRequest, read_registers
 from input_registers import DOCUMENT, INPUT_REGISTERS, SOURCE
 from security import roles_required
 from operation_locks import OperationBusy
+import inverter_controls
+from commands import execute_devices, transports_for
 
 modbus_web = Blueprint('modbus_web', __name__, url_prefix='/settings/modbus')
 log = logging.getLogger('ingecon.modbus')
@@ -53,7 +55,7 @@ def serializer():
 def payload(target, operation, config):
     return dict(user=g.user.id, version=g.user.session_version, role=g.user.role,
         target=[target.id, target.name, target.group, target.ip_address],
-        operation=operation, configuration=config.fingerprint)
+        operation=operation, configuration=config.fingerprint, authorization=inverter_controls.fingerprint(), model=target.model)
 
 
 def preview_or_execute(target, operation, config, *, reader=False):
@@ -67,7 +69,8 @@ def preview_or_execute(target, operation, config, *, reader=False):
         db.session.commit()
         token = serializer().dumps(dict(intent=intent, payload=data))
         return render_template('modbus_confirm.html', target=target, operation=operation,
-            confirmation_token=token, action_url=request.path, submitted=list(request.form.items(multi=True)))
+            confirmation_token=token, action_url=request.path, submitted=list(request.form.items(multi=True)),
+            controls_active=not reader and inverter_controls.enabled() and current_app.config['MODBUS_WRITES_ENABLED'])
     if len(tokens) != 1: abort(400, 'Неоднозначне підтвердження.')
     try:
         signed = serializer().loads(tokens[0], max_age=120)
@@ -81,7 +84,14 @@ def preview_or_execute(target, operation, config, *, reader=False):
         db.session.rollback()
         abort(400, 'Підтвердження вже використано або недійсне.')
     db.session.commit()  # Release SQLite before any optional read I/O.
-    if not reader or operation['function'] in (6, 16):
+    if not reader and inverter_controls.enabled() and current_app.config['MODBUS_WRITES_ENABLED']:
+        try:
+            result = execute_devices(g.user, operation['action'], [target], operation['percent'], writes_enabled=True,
+                transports={target.id: dict(port=operation['port'], device_id=operation['device_id'])})[0]
+            result['registers'] = []
+        except ValueError as error:
+            result = dict(outcome='blocked', message=str(error), registers=[])
+    elif not reader or operation['function'] in (6, 16):
         result = dict(outcome='blocked', message=WRITE_LOCK_REASON, registers=[])
     elif not current_app.config['REGISTER_READS_ENABLED']:
         result = dict(outcome='blocked', message='Фізичне читання вимкнене конфігурацією сервера.', registers=[])
@@ -139,7 +149,7 @@ def settings():
         db.session.execute(update(CommandAudit).where(CommandAudit.request_id==intent).values(
             result='saved', details=dict(before=asdict(config), after=asdict(saved))))
         db.session.commit()
-        flash('Спільну конфігурацію збережено. Команди залишаються непідтвердженими, фізичний запис заблоковано.', 'info')
+        flash('Історичну конфігурацію збережено. Вона не змінює окремий дозвіл і фіксовану карту команд 3Play.', 'info')
         return redirect(url_for('.settings'))
     return render_template('modbus_settings.html', config_values=asdict(config), config_fingerprint=config.fingerprint,
         fields=FIELDS, labels=LABELS, input_registers=INPUT_REGISTERS, document=DOCUMENT, source=SOURCE)
@@ -155,9 +165,12 @@ def control():
         action = field('action')
         value = number('value')
         if not 1 <= value <= 100: raise ValueError('Відсоток має бути цілим числом 1–100.')
-        address, command_value = config.command(action, value)
-        operation = dict(action=action, function=6, address=address, values=[command_value],
-            port=config.port, device_id=config.device_id, timeout=config.timeout, percent=value)
+        if inverter_controls.enabled():
+            operation = inverter_controls.plan(target, transports_for([target])[target.id], action, value)
+        else:
+            address, command_value = config.command(action, value)
+            operation = dict(action=action, function=6, address=address, values=[command_value],
+                port=config.port, device_id=config.device_id, timeout=config.timeout, percent=value)
         return preview_or_execute(target, operation, config)
     targets = db.session.execute(db.select(Inverter.id, Inverter.name, Inverter.ip_address).order_by(Inverter.name)).all()
     return render_template('modbus_control.html', targets=targets, modbus_config=config)

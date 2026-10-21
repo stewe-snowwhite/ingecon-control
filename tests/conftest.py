@@ -27,6 +27,7 @@ def isolation(monkeypatch, tmp_path):
     monkeypatch.delenv('INGECON_COOKIE_SECURE', raising=False)
     monkeypatch.delenv('INGECON_TELEGRAM_CONTROL_CONFIG', raising=False)
     monkeypatch.setenv('INGECON_MODBUS_CONFIG_FILE', str(tmp_path/'modbus.json'))
+    monkeypatch.setenv('INGECON_INVERTER_CONTROLS_FILE', str(tmp_path/'inverter-controls.json'))
     monkeypatch.delenv('INGECON_REGISTER_READS_ENABLED', raising=False)
     monkeypatch.chdir(tmp_path)
     import discovery

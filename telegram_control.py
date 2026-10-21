@@ -6,6 +6,7 @@ import os
 import stat
 from dataclasses import dataclass
 from pathlib import Path
+import inverter_controls
 
 
 def integer(value, low, high):
@@ -34,7 +35,7 @@ class TelegramControlPolicy:
 
     @property
     def enabled(self):
-        return bool(self.targets)
+        return bool(self.targets) or inverter_controls.enabled()
 
     def target(self, inverter):
         for target in self.targets:
@@ -43,6 +44,10 @@ class TelegramControlPolicy:
         raise ValueError('Інвертор або його IP не дозволено конфігурацією керування Telegram.')
 
     def validate(self, inverters, action):
+        if inverter_controls.enabled():
+            if action not in ('on','off','limit','limit_max') or any(inv.model != 'ingecon_sun_100tl' for inv in inverters):
+                raise ValueError('Керування дозволене лише для INGECON SUN 100TL.')
+            return [None for inv in inverters]
         if not self.enabled or action not in ('on', 'off'):
             raise ValueError('Telegram дозволяє лише Start/Stop явно налаштованих інверторів.')
         # Validate the entire group before the first write.

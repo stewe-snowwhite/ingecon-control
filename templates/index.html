@@ -19,14 +19,14 @@
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 {% if g.user.role != 'Viewer' %}<div class="action-bar" id="actions"><span id="selection-count">Обрано: 0</span>
 <button class="button" type="submit" name="action" value="test">Перевірити підключення</button>
-{% if config.get('MODBUS_TOOLS_AVAILABLE', False) %}<a class="button" href="{{ url_for('modbus_web.control') }}">Керування Modbus · попередній перегляд</a>{% endif %}
+{% if config.get('MODBUS_TOOLS_AVAILABLE', False) %}<a class="button" href="{{ url_for('modbus_web.control') }}">Керування Modbus{{ ' · попередній перегляд' if not config.MODBUS_WRITES_ENABLED else '' }}</a>{% endif %}
 <button class="button" type="submit" name="action" value="on" {% if not config.MODBUS_WRITES_ENABLED %}disabled{% endif %}>Увімкнути</button>
 <button class="button" type="submit" name="action" value="off" {% if not config.MODBUS_WRITES_ENABLED %}disabled{% endif %}>Вимкнути</button>
 <label class="compact-label">Ліміт, %<input type="number" name="limit_value" min="1" max="100" step="1" value="50" {% if not config.MODBUS_WRITES_ENABLED %}disabled{% endif %}></label>
 <button class="button" type="submit" name="action" value="limit" {% if not config.MODBUS_WRITES_ENABLED %}disabled{% endif %}>Застосувати ліміт</button>
 <button class="button" type="submit" name="action" value="limit_max" {% if not config.MODBUS_WRITES_ENABLED %}disabled{% endif %}>Максимум</button>
 {% if g.user.role == 'Administrator' %}<button class="button danger-outline" type="submit" name="action" value="delete">Видалити</button>{% endif %}</div>
-<p class="muted safety-note">{{ 'Modbus-записи заблоковані. Перевірка планується на наступний цикл монітора.' if not config.MODBUS_WRITES_ENABLED else 'Керування потребує підтвердження; запис регістра не підтверджує фізичний стан.' }}</p>{% endif %}
+<p class="muted safety-note">{{ 'Modbus-записи заблоковані. Перевірка планується на наступний цикл монітора.' if not config.MODBUS_WRITES_ENABLED else 'Реальне керування 100TL дозволено власником для тестування. Сумісність прошивки не підтверджена. Кожна дія потребує підтвердження.' }}</p>{% endif %}
 <div class="table-wrap"><table class="device-table"><thead><tr>{% if g.user.role != 'Viewer' %}<th class="select-cell"><input type="checkbox" id="select-all" aria-label="Обрати видимі інвертори (до 100)"></th>{% endif %}<th>Назва / IP</th><th>Група</th><th>Доступність</th><th>ICMP / TCP / Modbus</th><th>Остання перевірка (UTC)</th><th>Робочий стан</th><th>Активна потужність</th><th>Обмеження (%)</th><th>Причина обмеження</th></tr></thead>
 <tbody id="device-rows">{% for inverter in inverters %}{% include 'device_row.html' %}{% endfor %}</tbody></table></div>
 <p id="empty-list" class="empty-state" {% if inverters %}hidden{% endif %}>{{ 'За цими фільтрами нічого не знайдено.' if counts.total else 'Інвертори не знайдені. Додайте перший пристрій, щоб почати моніторинг.' }}</p></form></section>

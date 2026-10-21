@@ -9,7 +9,8 @@ from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import sessionmaker
 
-from commands import ControlBlocked, command_payload, execute_devices
+from commands import ControlBlocked, command_payload, execute_devices, transports_for
+import inverter_controls
 from models import (User, Inverter, StateEvent, TelegramLinkCode, TelegramLink,
                     TelegramCommand, CommandAudit, TelegramDelivery, TelegramUpdate, TelegramRate)
 from monitoring import current_statuses
@@ -53,10 +54,10 @@ class TelegramStore:
 
     @property
     def controls_enabled(self):
-        return self.control_policy.enabled and not modbus_safety.writes_locked()
+        return self.control_policy.enabled and (inverter_controls.enabled() or not modbus_safety.writes_locked())
 
-    def control_payload(self, user, action, inverters):
-        payload = command_payload(user, action, 100, inverters)
+    def control_payload(self, user, action, inverters, value=100):
+        payload = command_payload(user, action, value, inverters)
         payload['control_policy'] = self.control_policy.fingerprint
         payload['modbus_config'] = load_configuration().fingerprint
         return payload
@@ -196,15 +197,15 @@ class TelegramStore:
             raise TelegramAccess('Максимум 10 цілей у Telegram-підтвердженні. Виберіть окремий інвертор.')
         return rows, group
 
-    def prepare(self, telegram_id, action, kind, target):
-        if action not in ('on','off'):
-            raise TelegramAccess('Дозволено тільки start/stop із підтвердженням.')
+    def prepare(self, telegram_id, action, kind, target, value=100):
+        if action not in ('on','off','limit','limit_max') or type(value) is not int or not 1 <= value <= 100:
+            raise TelegramAccess('Дозволено start/stop і ліміт 1–100 із підтвердженням.')
         with self.sessions.begin() as session:
             _, user = self.user(session,telegram_id)
             if user.role not in ('Administrator','Operator'):
                 raise TelegramAccess('Viewer не має права керувати.')
             inverters, group = self.targets(session,kind,target)
-            payload = self.control_payload(user,action,inverters)
+            payload = self.control_payload(user,action,inverters,value)
             # Keep an audit of previews, including those superseded without a click.
             old = select(TelegramCommand.id).where(TelegramCommand.telegram_id==telegram_id,
                                                  TelegramCommand.state=='awaiting')
@@ -241,7 +242,7 @@ class TelegramStore:
             elif cancel:
                 result = 'cancelled'
             elif (user.role not in ('Administrator','Operator') or
-                  self.control_payload(user,payload['action'],inverters)!=payload):
+                  self.control_payload(user,payload['action'],inverters,payload.get('value',100))!=payload):
                 result = 'invalidated'
             elif row.group_name is not None and session.scalars(select(Inverter.id).where(
                     Inverter.group==row.group_name).order_by(Inverter.id)).all()!=ids:
@@ -250,6 +251,10 @@ class TelegramStore:
                 try:
                     # Preflight all targets before persisting the execution claim.
                     self.control_policy.validate(inverters, payload['action'])
+                    if inverter_controls.enabled():
+                        transports = transports_for(inverters)
+                        for inv in inverters:
+                            inverter_controls.plan(inv, transports[inv.id], payload['action'], payload['value'])
                 except ValueError as error:
                     result = 'blocked'
                     details = [dict(id=inv.id,name=inv.name,outcome='blocked',message=str(error)) for inv in inverters]
@@ -259,14 +264,15 @@ class TelegramStore:
             # Detached immutable-in-practice request snapshots; no SQLite lock
             # or checked-out connection is held during device operations.
             if result == 'processing':
+                transports = transports_for(inverters)
                 session.expunge(user)
                 for inverter in inverters:
                     session.expunge(inverter)
         if result != 'processing':
             return result, details
         try:
-            details = execute_devices(user, payload['action'], inverters, source='telegram',
-                writes_enabled=self.controls_enabled, telegram_policy=self.control_policy)
+            details = execute_devices(user, payload['action'], inverters, payload.get('value',100), source='telegram',
+                writes_enabled=self.controls_enabled, telegram_policy=self.control_policy, transports=transports)
             count = sum(row['outcome'] == 'register_confirmed' for row in details)
             result = 'confirmed' if count == len(details) else 'partial' if count else 'unconfirmed'
         except ControlBlocked as error:

@@ -20,7 +20,7 @@ class FormDataDouble {
   append(key,value) { this.values.set(key,[...this.getAll(key),value]); }
   set(key,value) { this.values.set(key,[value]); }
 }
-function ui() {
+function ui(override={}) {
   const ids = ['theme-toggle','command-dialog','page-alert','cancel-command','confirm-command',
     'confirmation-title','confirmation-description','confirmation-targets','result-list','command-results','dashboard'];
   const elements=new Map(ids.map(id=>[id,new Element()]));
@@ -34,6 +34,7 @@ function ui() {
   };
   const preview={confirmation_required:true,confirmation_token:'signed-test-token',action:'delete',
     label:'Видалити',value:100,inverters:[{id:1,name:'<script>device</script>',ip_address:'192.0.2.1'}]};
+  Object.assign(preview,override);
   const results={results:[{id:1,name:'<script>device</script>',outcome:'deleted',message:'Інвертор видалено.'}]};
   const context=vm.createContext({
     document,window:{},Event,FormData:FormDataDouble,AbortController,TypeError,SyntaxError,
@@ -74,6 +75,17 @@ test('confirmation cannot double-submit and displays per-device results', async(
   assert.equal(browser.elements.get('command-dialog').open,false);
   assert.equal(browser.elements.get('command-results').hidden,false);
   assert.match(browser.elements.get('result-list').children[0].textContent,/Інвертор видалено/);
+});
+
+test('control preview shows real-write warning and the exact transport and command', async()=>{
+  const browser=ui({action:'limit',label:'Обмежити потужність',value:37,
+    inverters:[{id:1,name:'100TL',ip_address:'192.0.2.1',command:{port:1502,device_id:7,function:16,address:1000,values:[3,12123]}}]});
+  await browser.submit();
+  assert.match(browser.elements.get('confirmation-description').textContent,/реальний Modbus-запис/);
+  assert.match(browser.elements.get('confirmation-description').textContent,/прошивки не підтверджена/);
+  assert.equal(browser.elements.get('confirmation-targets').children[0].textContent,
+    '100TL · 192.0.2.1 · TCP 1502, Unit ID 7, FC16, HR1000, слова [3, 12123]');
+  assert.equal(browser.calls.length,1);
 });
 
 test('command transport failure reports unknown outcome and never retries', async()=>{

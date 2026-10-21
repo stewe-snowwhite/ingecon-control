@@ -120,10 +120,11 @@ def check(manifest=None):
     from app import create_app
     from models import db, User
     from modbus_safety import writes_locked
+    from inverter_controls import enabled as controls_enabled
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
     from discovery_worker import schema_ready
-    if not writes_locked():
+    if not writes_locked() or controls_enabled():
         raise ValueError('Physical writes must remain blocked')
     secret = read_secret_file(ROOT/'instance/production/web-secret.key')
     application = create_app(dict(SECRET_KEY=secret, SQLALCHEMY_DATABASE_URI='sqlite:///:memory:',

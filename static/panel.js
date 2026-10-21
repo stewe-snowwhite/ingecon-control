@@ -86,12 +86,14 @@
           document.getElementById('confirmation-description').textContent =
             result.action === 'delete' ? 'Інвертори буде видалено зі списку; історія залишиться.' :
             result.label + (result.action === 'limit' ? ': ' + result.value + '%' : '') +
-            '. Запис регістра не підтверджує фізичний стан.';
+            '. Після підтвердження буде виконано реальний Modbus-запис. Сумісність прошивки не підтверджена. Запис регістра не підтверджує фізичний стан.';
           const targets = document.getElementById('confirmation-targets');
           targets.replaceChildren();
           result.inverters.forEach(row => {
             const item = document.createElement('li');
             item.textContent = row.name + ' · ' + row.ip_address;
+            if (row.command) item.textContent += ' · TCP ' + row.command.port + ', Unit ID ' + row.command.device_id +
+              ', FC' + row.command.function + ', HR' + row.command.address + ', слова [' + row.command.values.join(', ') + ']';
             targets.append(item);
           });
           dialog.showModal();

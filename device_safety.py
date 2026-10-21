@@ -6,7 +6,7 @@ class DeviceTransportBlocked(RuntimeError):
 
 
 def disable_device_transports(*, allow_control=False, allow_register_reads=False):
-    """Only an explicitly configured bot may retain its command client."""
+    """Authorized web/bot commands may retain their client, never monitoring probes."""
     import modbus_utils
     import monitoring
     import pymodbus.client

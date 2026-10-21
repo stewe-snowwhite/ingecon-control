@@ -1,8 +1,9 @@
 {% extends 'base.html' %}{% block title %}Підтвердження дії{% endblock %}
 {% block content %}<section class="surface narrow"><p class="eyebrow">ПЕРЕВІРКА ДІЇ</p><h1>{{ label }}</h1>
 <p class="notice warning">{{ 'Видалення прибере інвертори зі списку. Історія переходів залишиться.' if action == 'delete' else 'Підтвердження запису регістра не підтверджує фізичний стан інвертора.' }}</p>
+{% if action != 'delete' and config.MODBUS_WRITES_ENABLED %}<p class="notice warning">Після підтвердження буде виконано реальний Modbus-запис. Сумісність прошивки ще не підтверджена.</p>{% endif %}
 {% if action == 'limit' %}<p>Обмеження потужності: <strong>{{ value }}%</strong></p>{% endif %}
-<ul>{% for inverter in inverters %}<li>{{ inverter.name }} · {{ inverter.ip_address }}</li>{% endfor %}</ul>
+<ul>{% for inverter in inverters %}<li>{{ inverter.name }} · {{ inverter.ip_address }}{% if inverter.command %} · TCP {{ inverter.command.port }}, Unit ID {{ inverter.command.device_id }}, FC{{ inverter.command.function }}, HR{{ inverter.command.address }}, слова [{{ inverter.command['values'] | join(', ') }}]{% endif %}</li>{% endfor %}</ul>
 <p class="muted">Перевірте список. Підтвердження дійсне 2 хвилини.</p>
 <form method="POST" action="{{ url_for('control_inverters') }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="confirmation_token" value="{{ confirmation_token }}"><input type="hidden" name="action" value="{{ action }}"><input type="hidden" name="limit_value" value="{{ value }}">

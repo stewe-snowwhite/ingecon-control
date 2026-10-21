@@ -1,6 +1,7 @@
-"""Backend deployment interlock, intentionally not configurable by HTTP or env.
+"""Legacy/raw backend interlock, not configurable by HTTP or env.
 
-Changing this interlock requires a separate reviewed activation of verified maps.
+Owner-authorized fixed 3Play commands live in inverter_controls; they do not
+unlock this legacy/raw path or accept arbitrary register addresses.
 Tests may override it only while all device transports are mocked.
 """
 PHYSICAL_WRITES_LOCKED = True

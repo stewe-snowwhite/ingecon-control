@@ -2,6 +2,9 @@ import ipaddress
 import os
 import re
 import time
+import hashlib
+from sqlalchemy import update
+from sqlalchemy.exc import SQLAlchemyError
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -12,11 +15,12 @@ from flask.helpers import get_debug_flag
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.exceptions import HTTPException, SecurityError
 
-from models import db, Inverter, ROLES, User, MonitorConfig, InverterStatus, StateEvent, INVERTER_MODELS
+from models import db, Inverter, ROLES, User, MonitorConfig, InverterStatus, StateEvent, INVERTER_MODELS, CommandAudit
 from dashboard import (ACTIONS, STATES, command_payload, dashboard_snapshot, date_filter,
                        filters, sign_confirmation, verify_confirmation)
 from monitoring import current_statuses, Target, explain_reason
-from commands import block_reason, execute_devices
+from commands import block_reason, execute_devices, transports_for, ControlBlocked
+import inverter_controls
 from security import USERNAME, authenticate, load_user, log_failure, reserve_login_attempt, roles_required
 from telegram_web import telegram_web
 from users_web import users_web
@@ -45,7 +49,7 @@ def create_app(config=None):
         PERMANENT_SESSION_LIFETIME=timedelta(minutes=30),
         SESSION_REFRESH_EACH_REQUEST=False,
         MAX_CONTENT_LENGTH=64 * 1024,
-        MODBUS_WRITES_ENABLED=False,
+        MODBUS_WRITES_ENABLED=inverter_controls.enabled(),
         REGISTER_READS_ENABLED=os.environ.get('INGECON_REGISTER_READS_ENABLED', 'false').lower() == 'true',
         MONITOR_STALE_AFTER_SECONDS=None,
         LOGIN_IP_LIMIT=20,
@@ -377,10 +381,23 @@ def create_app(config=None):
             abort(403, reason)
         if action != 'test':
             payload = command_payload(g.user, action, value, inverters)
+            transports = transports_for(inverters)
+            if action != 'delete' and inverter_controls.enabled():
+                try:
+                    for inv in inverters: inverter_controls.plan(inv, transports[inv.id], action, value)
+                except ValueError as error:
+                    abort(400, str(error))
             tokens = request.form.getlist('confirmation_token')
             if not tokens:
                 confirmation = sign_confirmation(app.config['SECRET_KEY'], payload)
-                preview = [dict(id=inv.id, name=inv.name, ip_address=inv.ip_address) for inv in inverters]
+                if action != 'delete':
+                    db.session.add(CommandAudit(request_id='web:'+hashlib.sha256(confirmation.encode()).hexdigest()[:60],
+                        source='web', user_id=g.user.id, username=g.user.username, occurred_at=time.time(),
+                        action=action, targets=payload['targets'], result='preview', details=payload))
+                    db.session.commit()
+                preview = [dict(id=inv.id, name=inv.name, ip_address=inv.ip_address,
+                    command=inverter_controls.plan(inv, transports[inv.id], action, value)
+                    if action != 'delete' and inverter_controls.enabled() else None) for inv in inverters]
                 if wants_json():
                     return jsonify(confirmation_required=True, confirmation_token=confirmation,
                                    action=action, label=ACTIONS[action], value=value, inverters=preview)
@@ -389,6 +406,14 @@ def create_app(config=None):
             if len(tokens) != 1:
                 abort(400, 'Неоднозначне підтвердження.')
             verify_confirmation(app.config['SECRET_KEY'], tokens[0], payload)
+            if action != 'delete':
+                intent = 'web:'+hashlib.sha256(tokens[0].encode()).hexdigest()[:60]
+                claimed = db.session.execute(update(CommandAudit).where(CommandAudit.request_id==intent,
+                    CommandAudit.user_id==g.user.id, CommandAudit.result=='preview').values(result='processing')).rowcount
+                if claimed != 1:
+                    db.session.rollback()
+                    abort(400, 'Підтвердження вже використано або недійсне.')
+                db.session.commit()  # Claim before I/O; never repeat after a timeout/DB failure.
         results = []
         if action == 'delete':
             for inv in inverters:
@@ -402,8 +427,20 @@ def create_app(config=None):
                                     message='Перевірку заплановано на наступний цикл монітора.'))
             db.session.commit()
         else:
-            results = execute_devices(g.user, action, inverters, value,
-                writes_enabled=app.config['MODBUS_WRITES_ENABLED'])
+            try:
+                results = execute_devices(g.user, action, inverters, value,
+                    writes_enabled=app.config['MODBUS_WRITES_ENABLED'], transports=transports)
+            except (ControlBlocked, ValueError) as error:
+                results = [dict(id=inv.id, name=inv.name, outcome='blocked', message=str(error)) for inv in inverters]
+            except Exception:
+                results = [dict(id=inv.id, name=inv.name, outcome='unknown', message='Результат невідомий; не повторюйте команду без перевірки.') for inv in inverters]
+            try:
+                db.session.execute(update(CommandAudit).where(CommandAudit.request_id==intent).values(
+                    result='finished', details=results, occurred_at=time.time()))
+                db.session.commit()
+            except SQLAlchemyError:
+                db.session.rollback()
+                abort(503, 'Результат не збережено в аудиті. Перевірте стан інверторів; не повторюйте команду.')
         if wants_json():
             return jsonify(results=results)
         return render_template('results.html', results=results)

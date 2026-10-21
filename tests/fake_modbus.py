@@ -6,6 +6,7 @@ class Response:
     registers: list = field(default_factory=list)
     error: bool = False
     address: int = 0
+    count: int = 0
 
     def isError(self):
         return self.error
@@ -40,6 +41,12 @@ class FakeModbusTcpClient:
         self.calls.append(('read', address, count, device_id))
         return Response([self.registers.get(address+i, 0) for i in range(count)],
                         error=self.read_error)
+
+    def write_registers(self, address, values, *, device_id=1):
+        self.calls.append(('write_multiple', address, list(values), device_id))
+        if not self.write_error:
+            self.registers.update({address+i: value for i, value in enumerate(values)})
+        return Response(error=self.write_error, address=address, count=len(values))
 
     def read_input_registers(self, address, *, count=1, device_id=1):
         self.calls.append(('read_input', address, count, device_id))

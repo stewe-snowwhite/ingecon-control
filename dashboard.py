@@ -1,5 +1,6 @@
 """DB-only dashboard helpers; no monitoring or control transport calls."""
 from datetime import datetime, timedelta, timezone
+import secrets
 
 from flask import abort, request
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -41,12 +42,13 @@ def date_filter(value, end=False):
 
 
 def sign_confirmation(secret, payload):
-    return URLSafeTimedSerializer(secret, salt='dashboard-command-confirmation').dumps(payload)
+    return URLSafeTimedSerializer(secret, salt='dashboard-command-confirmation').dumps(dict(payload, nonce=secrets.token_hex(16)))
 
 
 def verify_confirmation(secret, token, payload):
     try:
         actual = URLSafeTimedSerializer(secret, salt='dashboard-command-confirmation').loads(token, max_age=120)
+        actual.pop('nonce', None)
     except (BadSignature, SignatureExpired):
         abort(400, 'Підтвердження недійсне або застаріло. Перевірте список і підтвердьте заново.')
     if actual != payload:

@@ -1,9 +1,10 @@
 {% extends 'base.html' %}{% block title %}Керування Modbus{% endblock %}
 {% block content %}<section class="surface narrow"><h1>Керування INGECON SUN 100TL</h1>
-<p class="notice warning">Історичні команди непідтверджені. Можна перевірити параметри та підтвердження дії; фізичний Modbus-запис заблоковано.</p>
+{% if config.MODBUS_WRITES_ENABLED %}<p class="notice warning">Керування всіма зареєстрованими INGECON SUN 100TL дозволено власником для тестування. Сумісність прошивки не підтверджена. Після окремого підтвердження буде виконано реальний запис. Start/Stop: HR1000=6/5; ліміт: FC16 HR1000–1001, команда 3 і масштабований параметр.</p>
+{% else %}<p class="notice warning">Історичні команди непідтверджені. Можна перевірити параметри та підтвердження дії; фізичний Modbus-запис заблоковано.</p>{% endif %}
 {% if targets %}<form method="POST" class="stacked-form"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <label>Зареєстрований інвертор<select name="inverter_id" required>{% for row in targets %}<option value="{{ row.id }}">{{ row.name }} · {{ row.ip_address }}</option>{% endfor %}</select></label>
-<p>Спільні параметри: TCP {{ modbus_config.port }}, Unit ID {{ modbus_config.device_id }}.</p>
+{% if config.MODBUS_WRITES_ENABLED %}<p>Використовуються порт і Unit ID вибраного інвертора. Перевірте їх перед підтвердженням.</p>{% else %}<p>Спільні історичні параметри: TCP {{ modbus_config.port }}, Unit ID {{ modbus_config.device_id }}.</p>{% endif %}
 <label>Обмеження потужності, %<input type="number" name="value" value="50" min="1" max="100" step="1" required></label>
 <div class="button-row"><button class="button" type="submit" name="action" value="on">Увімкнути</button><button class="button" type="submit" name="action" value="off">Вимкнути</button>
 <button class="button" type="submit" name="action" value="limit">Застосувати ліміт</button><button class="button" type="submit" name="action" value="limit_max">Максимум · 100 %</button></div></form>

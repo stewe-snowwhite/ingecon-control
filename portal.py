@@ -15,6 +15,7 @@ from app import create_app
 from device_safety import disable_device_transports
 from models import db, DISCOVERY_TABLES
 from portal_hosts import current_hosts
+import inverter_controls
 
 PRODUCTION_DATABASE = Path('/opt/ingecon-control/instance/production/ingecon.sqlite')
 
@@ -45,7 +46,7 @@ def create_portal_app():
         'SQLALCHEMY_DATABASE_URI': uri,
         'SQLALCHEMY_ENGINE_OPTIONS': {'connect_args': {'timeout': 5}},
         'TRUSTED_HOSTS': None,
-        'MODBUS_WRITES_ENABLED': False,
+        'MODBUS_WRITES_ENABLED': inverter_controls.enabled(),
     })
     def validate_host():
         # Run before loading a session/DB or handling CSRF. Read the root-owned
@@ -63,7 +64,9 @@ def create_portal_app():
     def loopback_proxy(environ, start_response):
         return (fixed if environ.get('REMOTE_ADDR') == '127.0.0.1' else original)(environ, start_response)
     application.wsgi_app = loopback_proxy
-    if application.config['REGISTER_READS_ENABLED']:
+    if application.config['MODBUS_WRITES_ENABLED']:
+        disable_device_transports(allow_control=True)
+    elif application.config['REGISTER_READS_ENABLED']:
         disable_device_transports(allow_register_reads=True)
     else:
         disable_device_transports()

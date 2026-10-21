@@ -18,7 +18,7 @@ HELP = ('Команди: /start, /status, /inverters, /groups, /history, /help.\
         '/notifications — налаштування сповіщень. /control — вибір цілей.\n'
         'Прив’язка: у вебпанелі Налаштування → Telegram → Створити код, потім /start КОД у приватному чаті.\n'
         'Статуси тільки з SQLite. Start/Stop — для Administrator/Operator після підтвердження '
-        'і явного дозволу для конкретного пристрою.')
+        'і явного дозволу. /limit ID ВІДСОТОК — ліміт 1–100 для інвертора.')
 
 
 def clean(value):
@@ -71,8 +71,17 @@ def build_dispatcher(store):
     dispatcher.include_router(router)
 
     def control_note():
-        return ('Start/Stop дозволені для налаштованих інверторів після підтвердження.'
+        return ('Start/Stop і ліміт дозволені після підтвердження. Сумісність прошивки не підтверджена.'
                 if store.controls_enabled else 'Start/Stop заблоковані конфігурацією.')
+
+    def target_lines(payload):
+        lines=[]
+        for row in payload['targets']:
+            text=f'#{row[0]} {clean(row[1])} · {clean(row[3])}'
+            transport=payload.get('transports',{}).get(str(row[0]))
+            if transport: text+=f" · TCP {transport['port']}, Unit ID {transport['device_id']}"
+            lines.append(text)
+        return '\n'.join(lines)
 
     def listing(telegram_id, kind, page=0):
         rows, more = store.inventory(telegram_id,'g' if kind=='ng' else kind,page)
@@ -135,11 +144,19 @@ def build_dispatcher(store):
 
     async def message_handler(message, bot):
         telegram_id = message.from_user.id
-        pieces = (message.text or '').split(maxsplit=1)
+        pieces = (message.text or '').split(maxsplit=2)
         command = pieces[0].split('@')[0].lstrip('/') if pieces else 'help'
         try:
             if command=='help':
                 await send(bot,telegram_id,HELP)
+                return
+            if command=='limit':
+                if len(pieces) != 3:
+                    raise TelegramAccess('Формат: /limit ID ВІДСОТОК (1–100). Потрібне окреме підтвердження.')
+                intent, payload = store.prepare(telegram_id, 'limit', 'i', int(pieces[1]), int(pieces[2]))
+                text = f"Підтвердьте ліміт {payload['value']}%:\n"+target_lines(payload)
+                text += '\nДійсне 120 секунд, одноразове. '+control_note()
+                await send(bot, telegram_id, text, keyboard([[('Підтвердити',f'confirm:{intent}'),('Скасувати',f'cancel:{intent}')]]))
                 return
             if command=='start' and len(pieces)==2:
                 store.redeem(telegram_id,pieces[1].strip())
@@ -150,8 +167,8 @@ def build_dispatcher(store):
             else:
                 text,markup = screen(telegram_id,command)
             await send(bot,telegram_id,text,markup)
-        except TelegramAccess as error:
-            await send(bot,telegram_id,str(error))
+        except ValueError as error:
+            await send(bot,telegram_id,str(error) if isinstance(error,TelegramAccess) else 'Некоректна команда. Відкрийте /help.')
 
     async def callback_handler(call, bot):
         telegram_id = call.from_user.id
@@ -174,11 +191,15 @@ def build_dispatcher(store):
                 if role in ('Administrator','Operator'):
                     suffix = '' if store.controls_enabled else ' 🔒'
                     rows.insert(0,[('Start'+suffix,f'act:on:{parts[1]}:{parts[2]}'),('Stop'+suffix,f'act:off:{parts[1]}:{parts[2]}')])
+                    if store.controls_enabled:
+                        rows.insert(1,[(f'{percent}%', f'act:limit:{parts[1]}:{parts[2]}:{percent}') for percent in (25,50,75,100)])
                 markup = keyboard(rows)
-            elif parts[0]=='act' and len(parts)==4:
-                intent,payload = store.prepare(telegram_id,parts[1],parts[2],int(parts[3]))
-                text = ('Підтвердьте '+('START' if parts[1]=='on' else 'STOP')+' для точного списку:\n'+
-                    '\n'.join(f'#{row[0]} {clean(row[1])} · {clean(row[3])}' for row in payload['targets'])+
+            elif parts[0]=='act' and len(parts) in (4,5):
+                value = int(parts[4]) if len(parts)==5 else 100
+                intent,payload = store.prepare(telegram_id,parts[1],parts[2],int(parts[3]),value)
+                label = {'on':'START', 'off':'STOP', 'limit':f'ЛІМІТ {value}%', 'limit_max':'МАКСИМУМ 100%'}[parts[1]]
+                text = ('Підтвердьте '+label+' для точного списку:\n'+
+                    target_lines(payload)+
                     '\nДійсне 120 секунд, одноразове. '+control_note()+
                     (' Дозволені команди виконують реальний Modbus-запис.' if store.controls_enabled else ''))
                 markup = keyboard([[('Підтвердити',f'confirm:{intent}'),('Скасувати',f'cancel:{intent}')]])
@@ -212,7 +233,7 @@ def build_dispatcher(store):
             text = str(error) if isinstance(error,TelegramAccess) else 'Некоректні дані кнопки.'
             await send(bot,telegram_id,text)
 
-    router.message.register(message_handler,Command('start','status','inverters','groups','history','help','notifications','control'))
+    router.message.register(message_handler,Command('start','status','inverters','groups','history','help','notifications','control','limit'))
     router.callback_query.register(callback_handler)
 
     @router.errors()
