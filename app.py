@@ -22,6 +22,7 @@ from telegram_web import telegram_web
 from users_web import users_web
 from modbus_web import modbus_web
 from discovery_web import web as discovery_web, context as discovery_context, integer as form_integer, ready as discovery_ready
+import discovery_bulk  # Registers the saved-results bulk handler before blueprint registration.
 from operation_locks import resource_lock, OperationBusy
 from modbus_config import load_configuration
 from configuration import cookie_secure_from_env, secret_from_env
@@ -72,6 +73,7 @@ def create_app(config=None):
     app.config['DISCOVERY_AVAILABLE'] = True
     app.config['MODBUS_TOOLS_AVAILABLE'] = True
     app.config['MODEL_SELECTION_AVAILABLE'] = True
+    app.config['BULK_ADD_AVAILABLE'] = True
     # Keep existing form/bookmark URLs protected by the same handlers.
     app.register_blueprint(telegram_web, url_prefix='/telegram', name='legacy_telegram')
     app.register_blueprint(users_web, url_prefix='/users', name='legacy_users')

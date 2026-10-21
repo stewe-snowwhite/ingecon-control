@@ -1,0 +1,20 @@
+{% extends 'base.html' %}
+{% block title %}Додати вибрані інвертори{% endblock %}
+{% block content %}<section class="surface"><h1>Додати вибрані інвертори</h1>
+<p>Вибрано: {{ candidates|length }}. Перевірте назви й транспорт. Модель, група, логін і пароль будуть спільними для всіх нових пристроїв.</p>
+<p class="notice warning">Пошук не гарантує модель. Для підтвердженої моделі INGECON SUN 100TL після збереження монітор автоматично використовує профіль FC04. Уже зареєстровані адреса, порт і Unit ID будуть пропущені без зміни їхніх облікових даних.</p>
+<form method="post" action="{{ url_for('discovery_web.bulk_add') }}" class="stacked-form">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="stage" value="save"><input type="hidden" name="confirmation_token" value="{{ confirmation_token }}">
+<div class="table-wrap"><table><thead><tr><th>IP</th><th>Порт / Unit ID</th><th>Назва</th><th>Перевірка</th></tr></thead><tbody>
+{% for item in candidates %}<tr><td data-label="IP">{{ item.ip }}<input type="hidden" name="candidate_id" value="{{ item.id }}"></td><td data-label="Порт / Unit ID">{{ item.port }} / {{ item.device_id }}</td>
+<td data-label="Назва"><label>Назва для {{ item.ip }}<input name="name_{{ item.id }}" value="Інвертор {{ item.ip }}" maxlength="100" required></label></td>
+<td data-label="Перевірка">{{ 'Вже доданий — буде пропущено' if (item.ip,item.port,item.device_id) in known else ('FC04 підтверджено' if item.modbus_ok else 'Можливий інвертор — FC04 не підтверджено') }}</td></tr>{% endfor %}
+</tbody></table></div>
+<label>Спільна група<input name="group" list="bulk-group-options" maxlength="100" required></label><datalist id="bulk-group-options">{% for group in groups %}<option value="{{ group }}">{% endfor %}</datalist>
+{% include 'inverter_model_field.html' %}
+<label>Спільний логін інверторів<input name="login" maxlength="100" autocomplete="off"></label>
+<label>Спільний пароль інверторів<input name="password" type="password" maxlength="100" autocomplete="new-password"></label>
+<p class="muted">Пароль не відображатиметься в результатах або журналі. На підтвердження відведено 15 хвилин.</p>
+<label><input type="checkbox" name="confirm_unverified" value="yes" required> Підтверджую модель та додавання всіх вибраних пристроїв без додаткової перевірки доступності.</label>
+<div class="button-row"><a class="button" href="{{ back_url }}">Скасувати</a><button class="button primary" type="submit">Підтвердити додавання вибраних</button></div>
+</form></section>{% endblock %}

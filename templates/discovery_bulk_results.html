@@ -1,0 +1,8 @@
+{% extends 'base.html' %}
+{% block title %}Результати масового додавання{% endblock %}
+{% block content %}<section class="surface"><h1>Результати масового додавання</h1>
+<p>Додано: {{ added }}. Пропущено дублікатів: {{ results|length - added }}.</p>
+<p class="muted">Пристрої додано в облік. Це не підтвердження поточного зв’язку; монітор виконає наступні перевірки окремо.</p>
+<div class="table-wrap"><table><thead><tr><th>IP</th><th>Порт / Unit ID</th><th>Назва</th><th>Результат</th></tr></thead><tbody>
+{% for item in results %}<tr><td data-label="IP">{{ item.ip }}</td><td data-label="Порт / Unit ID">{{ item.port }} / {{ item.device_id }}</td><td data-label="Назва">{{ item.name }}</td><td data-label="Результат">{{ 'Додано в облік' if item.outcome == 'added' else 'Пропущено — вже зареєстрований' }}</td></tr>{% endfor %}
+</tbody></table></div><div class="button-row"><a class="button primary" href="{{ url_for('index') }}">До інверторів</a><a class="button" href="{{ url_for('add_inverter') }}">До пошуку</a></div></section>{% endblock %}
