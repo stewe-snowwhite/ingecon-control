@@ -57,7 +57,8 @@
     document.dispatchEvent(new Event('commandcomplete'));
     if (!document.getElementById('dashboard') && results.some(row => row.outcome === 'deleted')) {
       document.querySelectorAll('form').forEach(form => {
-        if (form.action.includes('/edit/') || form.action.includes('/delete/')) form.hidden = true;
+        const actionUrl = form.getAttribute('action') || '';
+        if (actionUrl.includes('/edit/') || actionUrl.includes('/delete/')) form.hidden = true;
       });
     }
   }
@@ -71,16 +72,20 @@
       if (!state.connected) { alert('Немає актуального зв’язку із сервером. Дочекайтеся відновлення перед командою.'); return; }
       const data = new FormData(form);
       if (event.submitter && event.submitter.name) data.append(event.submitter.name, event.submitter.value);
-      if (form.id === 'control-form' && !data.getAll('selected_ids').length) {
+      if (form.getAttribute('id') === 'control-form' && !data.getAll('selected_ids').length) {
         alert('Оберіть хоча б один інвертор.'); return;
       }
       state.busy = true;
       originatingForm = form;
       pageAlert.hidden = true;
       try {
-        const result = await send(form.action, data);
+        // Named controls (name/id=action) shadow HTMLFormElement.action.
+        // Capture the actual attribute once for both confirmation stages.
+        const actionUrl = form.getAttribute('action');
+        if (!actionUrl || !actionUrl.trim()) throw new Error('Не задано адресу обробника форми. Оновіть сторінку.');
+        const result = await send(actionUrl, data);
         if (result.confirmation_required) {
-          pending = {url: form.action, data};
+          pending = {url: actionUrl, data};
           data.set('confirmation_token', result.confirmation_token);
           document.getElementById('confirmation-title').textContent = result.label;
           document.getElementById('confirmation-description').textContent =
