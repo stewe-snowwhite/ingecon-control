@@ -56,10 +56,12 @@ class TelegramStore:
     def controls_enabled(self):
         return self.control_policy.enabled and (inverter_controls.enabled() or not modbus_safety.writes_locked())
 
-    def control_payload(self, user, action, inverters, value=100):
+    def control_payload(self, user, action, inverters, value=100, *, all_targets=False):
         payload = command_payload(user, action, value, inverters)
         payload['control_policy'] = self.control_policy.fingerprint
         payload['modbus_config'] = load_configuration().fingerprint
+        if all_targets:
+            payload['target_scope'] = 'all'
         return payload
 
     def user(self, session, telegram_id):
@@ -157,7 +159,8 @@ class TelegramStore:
     def snapshot(self, telegram_id):
         with self.sessions() as session:
             self.user(session,telegram_id)
-            return current_statuses(session,now=self.clock())
+            now = self.clock()
+            return dict(current_statuses(session,now=now), generated_at=now)
 
     def inventory(self, telegram_id, kind, page=0):
         if kind not in ('i','g') or type(page) is not int or not 0 <= page <= 100000:
@@ -204,6 +207,15 @@ class TelegramStore:
             return bool(inserted and reserve_rate(session,'update:'+str(telegram_id),now,30,60))
 
     def targets(self, session, kind, target):
+        if kind == 'a':
+            if type(target) is not int or target != 0:
+                raise TelegramAccess('Некоректна ціль.')
+            rows = session.scalars(select(Inverter).order_by(Inverter.id).limit(11)).all()
+            if not rows:
+                raise TelegramAccess('Група «Усі» порожня.')
+            if len(rows)>10:
+                raise TelegramAccess('Максимум 10 цілей у Telegram-підтвердженні. Виберіть окремий інвертор або меншу групу.')
+            return rows, None
         if kind not in ('i','g') or not positive_id(target):
             raise TelegramAccess('Некоректна ціль.')
         inverter = session.get(Inverter,target)
@@ -224,7 +236,7 @@ class TelegramStore:
             if user.role not in ('Administrator','Operator'):
                 raise TelegramAccess('Viewer не має права керувати.')
             inverters, group = self.targets(session,kind,target)
-            payload = self.control_payload(user,action,inverters,value)
+            payload = self.control_payload(user,action,inverters,value,all_targets=kind=='a')
             # Keep an audit of previews, including those superseded without a click.
             old = select(TelegramCommand.id).where(TelegramCommand.telegram_id==telegram_id,
                                                  TelegramCommand.state=='awaiting')
@@ -261,7 +273,11 @@ class TelegramStore:
             elif cancel:
                 result = 'cancelled'
             elif (user.role not in ('Administrator','Operator') or
-                  self.control_payload(user,payload['action'],inverters,payload.get('value',100))!=payload):
+                  self.control_payload(user,payload['action'],inverters,payload.get('value',100),
+                      all_targets=payload.get('target_scope')=='all')!=payload):
+                result = 'invalidated'
+            elif payload.get('target_scope')=='all' and session.scalars(select(Inverter.id)
+                    .order_by(Inverter.id)).all()!=ids:
                 result = 'invalidated'
             elif row.group_name is not None and session.scalars(select(Inverter.id).where(
                     Inverter.group==row.group_name).order_by(Inverter.id)).all()!=ids:

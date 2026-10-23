@@ -106,7 +106,9 @@ def test_enabled_callback_ui_has_real_results_not_physical_success(tg, modbus):
     assert modbus[1] == []
     with Session(tg.engine) as session: intent = session.scalar(select(TelegramCommand.id))
     tg.feed(data='confirm:'+intent)
-    assert 'фізичний стан інверторів не підтверджено' in tg.api.messages[-1].text
+    assert 'Записи команд підтверджено.' in tg.api.messages[-1].text
+    assert 'фізичний стан' not in tg.api.messages[-1].text
+    assert 'увімкнено' not in tg.api.messages[-1].text.lower()
     assert '#1 Mock 1:' in tg.api.messages[-1].text
     assert len(modbus[1]) == 1
 

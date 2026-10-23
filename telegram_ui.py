@@ -1,6 +1,7 @@
 """aiogram handlers. All data/actions go through the SQLite store, never Modbus."""
 import asyncio
 import logging
+import math
 from datetime import datetime, timezone
 
 from aiogram import BaseMiddleware, Dispatcher, Router
@@ -27,6 +28,36 @@ def clean(value):
 
 def utc(value):
     return datetime.fromtimestamp(value,timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+
+
+def power_value(row):
+    value = row.get('active_power_w')
+    return value if not row.get('stale', True) and type(value) in (int,float) and math.isfinite(value) else None
+
+
+def power_text(watts):
+    return f'{watts/1000:.2f}'.replace('.', ',')+' кВт' if watts is not None else '—'
+
+
+def generation_text(snapshot):
+    rows = snapshot['inverters']
+    values = [(row,power_value(row)) for row in rows]
+    known = [(row,value) for row,value in values if value is not None]
+    if not known:
+        return 'Поточна генерація: — ('+('немає обладнання' if not rows else 'немає актуальних даних')+')'
+    text = 'Поточна генерація: '+power_text(sum(value for _,value in known))
+    if len(known) != len(rows):
+        text += f' (часткові дані {len(known)}/{len(rows)})'
+    times = [row['checked_at'] for row,_ in known if type(row.get('checked_at')) in (int,float) and math.isfinite(row['checked_at'])]
+    if times:
+        first,last=min(times),max(times)
+        text += '\nВиміри: '+(utc(first)+' — ' if first!=last else '')+utc(last)
+    return text
+
+
+def command_result_message(row):
+    # Telegram presentation only; keep full transport details in the shared audit.
+    return 'Запис команди підтверджено.' if row.get('outcome')=='register_confirmed' else clean(row['message'])
 
 
 def keyboard(rows):
@@ -84,20 +115,27 @@ def build_dispatcher(store):
         return '\n'.join(lines)
 
     def listing(telegram_id, kind, page=0):
-        rows, more = store.inventory(telegram_id,'g' if kind=='ng' else kind,page)
+        rows, more = store.inventory(telegram_id,'g' if kind=='ng' else 'i' if kind=='a' else kind,page)
         buttons = []
-        text = 'Інвертори' if kind=='i' else 'Групи сповіщень' if kind=='ng' else 'Групи'
-        snapshot = {row['id']:row for row in store.snapshot(telegram_id)['inverters']} if kind=='i' else {}
+        text = 'Група «Усі»' if kind=='a' else 'Інвертори' if kind=='i' else 'Групи сповіщень' if kind=='ng' else 'Групи'
+        data = store.snapshot(telegram_id) if kind in ('i','g','a') else None
+        snapshot = {row['id']:row for row in data['inverters']} if data else {}
+        if kind=='g' and page==0:
+            text += f'\nУсі · обладнання: {len(snapshot)}'
+            buttons.append([('Усі','list:a:0')])
+        if kind=='a':
+            text += f'\nОбладнання: {len(snapshot)}\n'+generation_text(data)
         for row in rows:
             target_id,label = row[:2]
             caption = clean(label)
-            if kind=='i':
+            if kind in ('i','a'):
                 state = snapshot.get(target_id,{}).get('state','Unknown')
                 caption = f'#{target_id} {caption} — {state}'
-                text += f'\n#{target_id} {clean(label)} · {clean(row[2])} · {state}'
+                text += f'\n#{target_id} {clean(label)} · {clean(row[2])} · {state} · '+power_text(power_value(snapshot.get(target_id,{})))
             else:
+                if caption.casefold()=='усі': caption += ' (збережена група)'
                 text += '\n'+caption
-            callback = f'pref:group:{target_id}' if kind=='ng' else f'target:{kind}:{target_id}'
+            callback = f'pref:group:{target_id}' if kind=='ng' else f'target:{"i" if kind=="a" else kind}:{target_id}'
             buttons.append([(caption,callback)])
         if not rows:
             text += '\nСписок порожній.'
@@ -105,6 +143,16 @@ def build_dispatcher(store):
         if page: nav.append(('←',f'list:{kind}:{page-1}'))
         if more: nav.append(('→',f'list:{kind}:{page+1}'))
         if nav: buttons.append(nav)
+        if kind=='a':
+            _,role=store.identity(telegram_id)
+            if len(snapshot)>10 and role in ('Administrator','Operator'):
+                text += '\nДля групової команди максимум 10 цілей; виберіть інвертор або меншу групу.'
+            elif snapshot and role in ('Administrator','Operator'):
+                text += '\nКоманди нижче стосуються всієї групи «Усі», включно з іншими сторінками.'
+                suffix = '' if store.controls_enabled else ' 🔒'
+                buttons.append([('Start: Усі'+suffix,'act:on:a:0'),('Stop: Усі'+suffix,'act:off:a:0')])
+                if store.controls_enabled:
+                    buttons.append([(f'{percent}%',f'act:limit:a:0:{percent}') for percent in (25,50,75,100)])
         if kind=='ng': buttons.append([('Усі групи','pref:all')])
         buttons.append([('Меню','menu:start')])
         return text,keyboard(buttons)
@@ -117,6 +165,7 @@ def build_dispatcher(store):
                       for state in ('Online','Offline','Degraded','Unknown')}
             text = f"Усього: {len(snapshot['inverters'])}\n"+' · '.join(f'{key}: {value}' for key,value in counts.items())
             text += '\nМонітор: '+('активний' if snapshot['monitor']['alive'] else 'зупинений або дані застарілі')
+            text += '\nСтаном на '+utc(snapshot['generated_at'])+'\n'+generation_text(snapshot)
             return text,menu(role, store.controls_enabled)
         if section=='history':
             events = store.history(telegram_id)
@@ -128,11 +177,13 @@ def build_dispatcher(store):
             if role=='Viewer':
                 raise TelegramAccess('Viewer не має права керувати.')
             return 'Виберіть інвертор або групу. '+control_note(),keyboard([
-                [('Інвертор','list:i:0'),('Група','list:g:0')],[('Меню','menu:start')]])
+                [('Інвертор','list:i:0'),('Група','list:g:0'),('Усі','list:a:0')],[('Меню','menu:start')]])
         if section=='notifications':
             settings = store.preferences(telegram_id)
             text = 'Сповіщення: '+('увімкнено' if settings['notifications'] else 'вимкнено')
-            text += '\nГрупа: '+clean(settings['group_filter'] or 'Усі')
+            group = clean(settings['group_filter'] or 'Усі')
+            if settings['group_filter'] is not None and group.casefold()=='усі': group += ' (збережена група)'
+            text += '\nГрупа: '+group
             buttons = [[('Увімкнути / вимкнути','pref:notifications')]]
             for name in ('online','offline','degraded'):
                 buttons.append([(name.title()+(' ✓' if settings[name] else ' —'),'pref:'+name)])
@@ -180,7 +231,7 @@ def build_dispatcher(store):
                 raise TelegramAccess('Некоректна кнопка.')
             if parts[0]=='menu' and len(parts)==2 and parts[1] in ('start','status','history','help','control','notifications'):
                 text,markup = screen(telegram_id,parts[1])
-            elif parts[0]=='list' and len(parts)==3 and parts[1] in ('i','g','ng'):
+            elif parts[0]=='list' and len(parts)==3 and parts[1] in ('i','g','ng','a'):
                 text,markup = listing(telegram_id,parts[1],int(parts[2]))
             elif parts[0]=='target' and len(parts)==3:
                 with store.sessions() as session:
@@ -208,11 +259,11 @@ def build_dispatcher(store):
                 result,details = await asyncio.to_thread(store.confirm, telegram_id, parts[1], cancel=parts[0]=='cancel')
                 labels = {'blocked':'Заблоковано. Modbus-запис не виконувався.', 'expired':'Підтвердження застаріло.',
                           'cancelled':'Скасовано.', 'invalidated':'Права, конфігурація або цілі змінено. Підготуйте нове підтвердження.',
-                          'confirmed':'Підтверджено записи регістрів; фізичний стан інверторів не підтверджено.',
+                          'confirmed':'Записи команд підтверджено.',
                           'partial':'Частину записів підтверджено; перевірте результати кожного інвертора.',
                           'unconfirmed':'Записи не підтверджено. Автоматичного повторення немає.',
                           'unknown':'Результат невідомий. Не повторюйте команду без перевірки стану.'}
-                text = labels[result]+'\n'+'\n'.join(f"#{row['id']} {clean(row['name'])}: {clean(row['message'])}" for row in details)
+                text = labels[result]+'\n'+'\n'.join(f"#{row['id']} {clean(row['name'])}: {command_result_message(row)}" for row in details)
                 markup = menu(role, store.controls_enabled)
             elif parts[0]=='pref' and len(parts) in (2,3):
                 if parts[1]=='all' and len(parts)==2:
