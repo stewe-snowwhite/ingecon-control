@@ -33,6 +33,7 @@ from configuration import cookie_secure_from_env, secret_from_env
 import monitor_schedule
 from monitor_web import web as monitor_web
 from telegram_store import TelegramStore
+from power_web import web as power_web
 
 csrf = CSRFProtect()
 ALL_ROLES = ROLES
@@ -78,6 +79,8 @@ def create_app(config=None):
     app.register_blueprint(modbus_web)
     app.register_blueprint(discovery_web)
     app.register_blueprint(monitor_web)
+    app.register_blueprint(power_web)
+    app.config['POWER_BUDGET_AVAILABLE'] = True
     app.config['MONITOR_POLLING_AVAILABLE'] = True
     app.config['DISCOVERY_AVAILABLE'] = True
     app.config['MODBUS_TOOLS_AVAILABLE'] = True

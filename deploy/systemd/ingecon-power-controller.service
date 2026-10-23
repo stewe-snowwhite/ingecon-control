@@ -1,0 +1,36 @@
+[Unit]
+Description=ingecon-control fleet power budget (calculation only by default)
+After=network.target ingecon-monitor.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=codex
+Group=codex
+WorkingDirectory=/opt/ingecon-control
+Environment=INGECON_LOCK_DIR=/opt/ingecon-control/instance/locks
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+UnsetEnvironment=INGECON_SECRET_KEY INGECON_SECRET_KEY_FILE INGECON_TELEGRAM_TOKEN FLASK_DEBUG
+ExecStart=/opt/ingecon-control/.venv/bin/python -m power_controller --database-uri sqlite:////opt/ingecon-control/instance/production/ingecon.sqlite
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=90
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/opt/ingecon-control/instance/production /opt/ingecon-control/instance/locks
+InaccessiblePaths=/opt/ingecon-control/instance/telegram /opt/ingecon-control/instance/production/backups /opt/ingecon-control/instance/production/web-secret.key
+MemoryMax=192M
+TasksMax=20
+
+[Install]
+WantedBy=multi-user.target

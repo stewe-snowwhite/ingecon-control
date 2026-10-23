@@ -49,6 +49,14 @@ def command_payload(user, action, value, inverters):
 
 
 def execute_devices(user, action, inverters, value=100, *, writes_enabled=False, source='web', telegram_policy=None, transports=None):
+    from power_budget import command_lock, guard_manual
+    with command_lock():
+        guard_manual(action,inverters)
+        return _execute_devices(user,action,inverters,value,writes_enabled=writes_enabled,
+            source=source,telegram_policy=telegram_policy,transports=transports)
+
+
+def _execute_devices(user, action, inverters, value=100, *, writes_enabled=False, source='web', telegram_policy=None, transports=None):
     if not user.active or user.role not in ('Administrator', 'Operator'):
         raise ControlBlocked('Недостатньо прав для керування.')
     if action not in ('on','off','limit','limit_max') or type(value) is not int or not 1 <= value <= 100:

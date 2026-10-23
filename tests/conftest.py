@@ -29,6 +29,7 @@ def isolation(monkeypatch, tmp_path):
     monkeypatch.setenv('INGECON_MODBUS_CONFIG_FILE', str(tmp_path/'modbus.json'))
     monkeypatch.setenv('INGECON_INVERTER_CONTROLS_FILE', str(tmp_path/'inverter-controls.json'))
     monkeypatch.setenv('INGECON_MONITOR_SCHEDULE_FILE', str(tmp_path/'monitor-schedule.json'))
+    monkeypatch.setenv('INGECON_POWER_BUDGET_FILE', str(tmp_path/'power-budget.json'))
     monkeypatch.delenv('INGECON_REGISTER_READS_ENABLED', raising=False)
     monkeypatch.chdir(tmp_path)
     import discovery

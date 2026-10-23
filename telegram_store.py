@@ -5,7 +5,7 @@ import re
 import secrets
 import time
 
-from sqlalchemy import case, delete, func, inspect, select, update
+from sqlalchemy import case, delete, func, inspect, or_, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import sessionmaker
 
@@ -34,6 +34,12 @@ def positive_id(value):
 
 def latest_event(session):
     return session.scalar(select(func.max(StateEvent.id))) or 0
+
+
+def intent_audits(ids):
+    # Shared intent table also holds web/Telegram fleet-budget confirmations.
+    return or_(*(CommandAudit.request_id.in_(select(prefix+TelegramCommand.id).where(
+        TelegramCommand.id.in_(ids))) for prefix in ('tg:','budget:')))
 
 
 def reserve_rate(session, key, now, limit, window):
@@ -140,12 +146,11 @@ class TelegramStore:
         session.execute(update(TelegramDelivery).where(TelegramDelivery.telegram_id.in_(ids),
             TelegramDelivery.state=='pending').values(state='skipped',error='unlinked'))
         pending = select(TelegramCommand.id).where(TelegramCommand.user_id==user_id,
-                                                   TelegramCommand.state.in_(('awaiting','input')))
-        session.execute(update(CommandAudit).where(CommandAudit.request_id.in_(
-            select('tg:'+TelegramCommand.id).where(TelegramCommand.id.in_(pending))))
+                                                   TelegramCommand.state.in_(('awaiting','input','budget_input')))
+        session.execute(update(CommandAudit).where(intent_audits(pending))
             .values(result='cancelled'))
         session.execute(update(TelegramCommand).where(TelegramCommand.user_id==user_id,
-            TelegramCommand.state.in_(('awaiting','input'))).values(state='cancelled'))
+            TelegramCommand.state.in_(('awaiting','input','budget_input'))).values(state='cancelled'))
         session.execute(delete(TelegramLink).where(TelegramLink.user_id==user_id))
 
     def web_link(self, user_id):
@@ -243,9 +248,8 @@ class TelegramStore:
     def _new_intent(self, session, user, telegram_id, payload, group, *, input_request=False):
         # A new choice supersedes both an old prompt and an old confirmation.
         old = select(TelegramCommand.id).where(TelegramCommand.telegram_id==telegram_id,
-            TelegramCommand.state.in_(('awaiting','input')))
-        session.execute(update(CommandAudit).where(CommandAudit.request_id.in_(
-            select('tg:'+TelegramCommand.id).where(TelegramCommand.id.in_(old)))).values(result='superseded'))
+            TelegramCommand.state.in_(('awaiting','input','budget_input')))
+        session.execute(update(CommandAudit).where(intent_audits(old)).values(result='superseded'))
         session.execute(update(TelegramCommand).where(TelegramCommand.id.in_(old)).values(state='cancelled'))
         intent = secrets.token_hex(12)
         session.add(TelegramCommand(id=intent,telegram_id=telegram_id,user_id=user.id,
@@ -298,7 +302,7 @@ class TelegramStore:
         with self.sessions.begin() as session:
             _,user=self.user(session,telegram_id)
             ids=session.scalars(select(TelegramCommand.id).where(TelegramCommand.telegram_id==telegram_id,
-                TelegramCommand.user_id==user.id,TelegramCommand.state=='input')).all()
+                TelegramCommand.user_id==user.id,TelegramCommand.state.in_(('input','budget_input')))).all()
             if not ids:return False
             session.execute(update(TelegramCommand).where(TelegramCommand.id.in_(ids)).values(state='cancelled'))
             session.execute(update(CommandAudit).where(CommandAudit.request_id.in_(['tg:'+value for value in ids]))
@@ -363,6 +367,8 @@ class TelegramStore:
             session.expire_all()
             _, user = self.user(session, telegram_id)  # Recheck after the atomic write claim.
             payload = row.payload
+            if payload.get('kind')=='power_budget':
+                raise TelegramAccess('Використайте кнопки підтвердження загального ліміту.')
             ids = [target[0] for target in payload['targets']]
             inverters = session.scalars(select(Inverter).where(Inverter.id.in_(ids)).order_by(Inverter.id)).all()
             result, details = 'processing', []
@@ -498,8 +504,7 @@ class TelegramStore:
     def recover(self):
         with self.sessions.begin() as session:
             processing = select(TelegramCommand.id).where(TelegramCommand.state=='processing')
-            session.execute(update(CommandAudit).where(CommandAudit.request_id.in_(
-                select('tg:'+TelegramCommand.id).where(TelegramCommand.id.in_(processing))))
+            session.execute(update(CommandAudit).where(intent_audits(processing))
                 .values(result='unknown'))
             session.execute(update(TelegramCommand).where(TelegramCommand.state=='processing').values(state='unknown'))
             session.execute(update(TelegramDelivery).where(TelegramDelivery.state=='sending')
@@ -515,9 +520,8 @@ class TelegramStore:
         now = self.clock()
         with self.sessions.begin() as session:
             expired = select(TelegramCommand.id).where(TelegramCommand.expires_at<=now,
-                                                       TelegramCommand.state.in_(('awaiting','input')))
-            session.execute(update(CommandAudit).where(CommandAudit.request_id.in_(
-                select('tg:'+TelegramCommand.id).where(TelegramCommand.id.in_(expired))))
+                                                       TelegramCommand.state.in_(('awaiting','input','budget_input')))
+            session.execute(update(CommandAudit).where(intent_audits(expired))
                 .values(result='expired'))
             session.execute(update(TelegramCommand).where(TelegramCommand.id.in_(expired)).values(state='expired'))
             for model, condition, key in (

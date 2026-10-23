@@ -14,6 +14,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from telegram_store import TelegramAccess
 from commands import MAX_CONTROL_TARGETS
+from power_telegram import PowerTelegram
+from power_budget import watts
 
 MESSAGE_PART_LIMIT = 3500  # Conservative UTF-16 budget below Telegram's text limit.
 SEND_PART_DELAY = 1
@@ -126,6 +128,7 @@ class UpdateGate(BaseMiddleware):
 
 
 def build_dispatcher(store):
+    power=PowerTelegram(store)
     dispatcher = Dispatcher(disable_fsm=True)
     dispatcher.update.outer_middleware(UpdateGate(store))
     router = Router()
@@ -219,8 +222,11 @@ def build_dispatcher(store):
         if section=='control':
             if role=='Viewer':
                 raise TelegramAccess('Viewer не має права керувати.')
-            return 'Виберіть інвертор або групу. '+control_note(),keyboard([
-                [('Інвертор','list:i:0'),('Група','list:g:0'),('Усі','list:a:0')],[('Меню','menu:start')]])
+            rows=[[('Інвертор','list:i:0'),('Група','list:g:0'),('Усі','list:a:0')]]
+            if role=='Administrator':rows.append([('Загальний ліміт, кВт','menu:power')])
+            rows.append([('Меню','menu:start')])
+            return 'Виберіть інвертор або групу. '+control_note(),keyboard(rows)
+        if section=='power':return power.screen(telegram_id)
         if section=='notifications':
             settings = store.preferences(telegram_id)
             text = 'Сповіщення: '+('увімкнено' if settings['notifications'] else 'вимкнено')
@@ -249,6 +255,14 @@ def build_dispatcher(store):
                 await send(bot,telegram_id,'Ручне введення скасовано.' if cancelled else
                     'Немає активного ручного введення. Для готової команди натисніть її кнопку «Скасувати».')
                 return
+            if command in ('power','poweroff'):
+                store.cancel_limit_input(telegram_id)
+                if command=='poweroff':text,markup=power.prepare(telegram_id)
+                elif len(pieces)>1:
+                    text,markup=power.prepare(telegram_id,watts(pieces[1]),watts(pieces[2]) if len(pieces)>2 else 100000)
+                else:text,markup=power.screen(telegram_id)
+                await send(bot,telegram_id,text,markup)
+                return
             if command=='limit':
                 if len(pieces) != 3:
                     raise TelegramAccess('Формат: /limit ID ВІДСОТОК (1–100). Потрібне окреме підтвердження.')
@@ -267,17 +281,21 @@ def build_dispatcher(store):
                 text,markup = screen(telegram_id,command)
             await send(bot,telegram_id,text,markup)
         except ValueError as error:
-            await send(bot,telegram_id,str(error) if isinstance(error,TelegramAccess) else 'Некоректна команда. Відкрийте /help.')
+            await send(bot,telegram_id,str(error) if isinstance(error,TelegramAccess) or command in ('power','poweroff') else 'Некоректна команда. Відкрийте /help.')
 
     async def limit_input_handler(message, bot):
         telegram_id=message.from_user.id
+        is_budget_input=False
         try:
             reply_to=message.reply_to_message.message_id if message.reply_to_message else None
-            intent,payload=store.submit_limit_input(telegram_id,message.text,reply_to)
-            text,markup=confirmation(intent,payload)
+            is_budget_input=power.has_input(telegram_id)
+            if is_budget_input:text,markup=power.submit(telegram_id,message.text,reply_to)
+            else:
+                intent,payload=store.submit_limit_input(telegram_id,message.text,reply_to)
+                text,markup=confirmation(intent,payload)
             await send(bot,telegram_id,text,markup)
         except ValueError as error:
-            await send(bot,telegram_id,str(error) if isinstance(error,TelegramAccess) else
+            await send(bot,telegram_id,str(error) if isinstance(error,TelegramAccess) or is_budget_input else
                        'Конфігурація керування недоступна. Зверніться до адміністратора.')
 
     async def callback_handler(call, bot):
@@ -288,7 +306,7 @@ def build_dispatcher(store):
             _,role = store.identity(telegram_id)
             if len(call.data or '')>64:
                 raise TelegramAccess('Некоректна кнопка.')
-            if parts[0]=='menu' and len(parts)==2 and parts[1] in ('start','status','history','help','control','notifications'):
+            if parts[0]=='menu' and len(parts)==2 and parts[1] in ('start','status','history','help','control','notifications','power'):
                 store.cancel_limit_input(telegram_id)
                 text,markup = screen(telegram_id,parts[1])
             elif parts[0]=='list' and len(parts)==3 and parts[1] in ('i','g','ng','a'):
@@ -307,6 +325,14 @@ def build_dispatcher(store):
                     if store.controls_enabled:
                         rows.insert(1,limit_buttons(parts[1],parts[2]))
                 markup = keyboard(rows)
+            elif parts[0]=='budget' and len(parts) in (2,3):
+                if parts==['budget','input']:
+                    await power.input(telegram_id,bot)
+                    return
+                if parts==['budget','disable']:text,markup=power.prepare(telegram_id)
+                elif len(parts)==3 and parts[1] in ('confirm','cancel'):
+                    text,markup=power.confirm(telegram_id,parts[2],cancel=parts[1]=='cancel')
+                else:raise TelegramAccess('Невідома дія загального ліміту.')
             elif parts[:2]==['input','limit'] and len(parts)==4:
                 intent,payload=store.request_limit_input(telegram_id,parts[2],int(parts[3]))
                 first=payload['targets'][0]
@@ -348,12 +374,12 @@ def build_dispatcher(store):
                 raise TelegramAccess('Невідома кнопка. Відкрийте /start.')
             await send(bot,telegram_id,text,markup)
         except (ValueError,OverflowError) as error:
-            if parts[0] in ('input','act','confirm','cancel'):
+            if parts[0] in ('budget','input','act','confirm','cancel'):
                 store.audit_rejected(telegram_id,call.id)
-            text = str(error) if isinstance(error,TelegramAccess) else 'Некоректні дані кнопки.'
+            text = str(error) if isinstance(error,TelegramAccess) or parts[0]=='budget' else 'Некоректні дані кнопки.'
             await send(bot,telegram_id,text)
 
-    router.message.register(message_handler,Command('start','status','inverters','groups','history','help','notifications','control','limit','cancel'))
+    router.message.register(message_handler,Command('start','status','inverters','groups','history','help','notifications','control','limit','cancel','power','poweroff'))
     router.message.register(limit_input_handler,F.text & ~F.text.startswith('/'))
     router.callback_query.register(callback_handler)
 

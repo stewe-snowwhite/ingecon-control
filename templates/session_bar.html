@@ -1,6 +1,7 @@
 <nav class="navigation" aria-label="Основна навігація">
 <a href="{{ url_for('index') }}" {% if request.endpoint == 'index' %}aria-current="page"{% endif %}>Огляд</a>
 <a href="{{ url_for('history') }}" {% if request.endpoint == 'history' %}aria-current="page"{% endif %}>Історія</a>
+{% if config.get('POWER_BUDGET_AVAILABLE',False) %}<a href="{{ url_for('power_web.page') }}" {% if request.blueprint == 'power_web' %}aria-current="page"{% endif %}>Загальний ліміт, кВт</a>{% endif %}
 {% if config.get('SETTINGS_AVAILABLE', False) %}<a href="{{ url_for('settings') }}" {% if request.endpoint == 'settings' or request.blueprint in ('telegram_web', 'users_web', 'legacy_telegram', 'legacy_users', 'modbus_web') %}aria-current="page"{% endif %}>Налаштування</a>{% endif %}
 {% if g.user.role == 'Administrator' %}<a href="{{ url_for('add_inverter') }}">Додати інвертор</a>
 {% endif %}</nav>

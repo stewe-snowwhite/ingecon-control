@@ -6,6 +6,7 @@ import time
 from flask import Blueprint, abort, flash, g, jsonify, redirect, request, url_for
 
 import monitor_schedule
+import power_budget
 from operation_locks import OperationBusy
 from security import roles_required
 
@@ -28,6 +29,9 @@ def polling():
         if len(values) != 1 or not re.fullmatch(r'[1-9][0-9]{0,4}', values[0], re.ASCII):
             abort(400, 'Вкажіть цілий інтервал від 1 до 86400 секунд.')
         interval = int(values[0])
+        budget=power_budget.load()
+        if budget and budget['enabled'] and interval>power_budget.INTERVAL:
+            abort(400,'За активного загального ліміту інтервал опитування не може перевищувати 30 секунд.')
     try:
         policy = monitor_schedule.configure(interval)
     except ValueError as error:
