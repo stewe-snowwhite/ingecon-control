@@ -102,7 +102,7 @@ def test_pair_code_is_hashed_one_time_and_private(tg):
         row = session.get(TelegramLinkCode,1)
         assert row.digest==hashlib.sha256(code.encode()).hexdigest() and code not in row.digest
     tg.feed('/start '+code)
-    assert 'Прив’язано: admin' in tg.api.messages[-1].text
+    assert tg.api.messages[-1].text=='Авторизовано: admin. Оберіть дії:'
     assert tg.api.messages[-1].reply_markup
     with pytest.raises(TelegramAccess):
         tg.store.redeem(1002,code)

@@ -235,7 +235,7 @@ def build_dispatcher(store):
             return text,keyboard(buttons)
         if section=='help':
             return HELP+'\n'+control_note(),menu(role, store.controls_enabled)
-        return f'Прив’язано: {clean(username)} · {role}\nСтатуси лише з SQLite. '+control_note(),menu(role, store.controls_enabled)
+        return f'Авторизовано: {clean(username)}. Оберіть дії:',menu(role, store.controls_enabled)
 
     async def message_handler(message, bot):
         telegram_id = message.from_user.id
