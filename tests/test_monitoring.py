@@ -578,14 +578,15 @@ def test_worker_interval_and_overrun_without_sleep(storage,poll_duration,expecte
         def is_set(self): return self.stopped
         def wait(self,delay):
             waits.append(delay)
-            self.stopped=True
+            wall[0]+=delay; monotonic[0]+=delay
+            self.stopped=sum(waits)>=expected_wait
     class Probes:
         def poll(self,target):
             wall[0]+=poll_duration;monotonic[0]+=poll_duration
             return observation(wall[0],target=target)
     worker=MonitorWorker(storage,Probes(),stop_event=Stop(),clock=lambda:wall[0],monotonic=lambda:monotonic[0])
     worker.run()
-    assert waits==[expected_wait]
+    assert sum(waits)==expected_wait and all(0 < delay <= 1 for delay in waits)
     with Session(storage) as session:
         assert session.get(MonitorHeartbeat,1).stopped
         assert session.get(MonitorHeartbeat,1).cycle_duration_seconds==poll_duration

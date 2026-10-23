@@ -116,6 +116,19 @@ test('power uses watts with explicit kW display, including zero and reverse flow
   assert.equal(model.formatPower(null), '—');
 });
 
+test('polling policy defaults to 30 seconds, accepts 1 second and expires at the server deadline', () => {
+  assert.equal(model.pollingPolicy(sample(),1000).interval_seconds,30);
+  for (const seconds of [1,17,30,90,3600,86400]) {
+    const data={polling:{temporary:true,interval_seconds:seconds,expires_at:2800}};
+    assert.equal(model.pollingPolicy(data,2799).interval_seconds,seconds);
+    assert.equal(model.pollingPolicy(data,2800).interval_seconds,30);
+    assert.equal(model.pollingPolicy(data,2801).temporary,false);
+  }
+  for (const value of [0,86401,NaN,'1',null,1.5]) {
+    assert.equal(model.pollingPolicy({polling:{temporary:true,interval_seconds:value,expires_at:2800}},1000).interval_seconds,30);
+  }
+});
+
 const reasonLabels = [
   'Без обмеження', 'Без обмеження',
   'Не визначено виробником', 'Не визначено виробником', 'Не визначено виробником',
@@ -154,6 +167,11 @@ function browserDouble(initiallyFail=false, reasonCode=1, includeCatalog=true, o
   const ids = ['dashboard','search','group-filter','state-filter','device-rows','filters','heartbeat','heartbeat-time',
     'monitor-detail','connection-warning','list-count','empty-list','api-warning','refresh-label','page-alert'];
   ids.forEach(id=>elements.set(id,new Element()));
+  if (options.pollingControls) {
+    for (const id of ['polling-form','polling-seconds','polling-apply','polling-reset','polling-status','polling-feedback']) elements.set(id,new Element());
+    elements.get('polling-form').getAttribute=()=>'/monitor/polling';
+    elements.get('polling-seconds').value='30';
+  }
   const sortButtons = new Map();
   if (options.sortControls !== false) {
     for (const id of ['sort-key','sort-direction','sort-status']) elements.set(id,new Element());
@@ -183,35 +201,105 @@ function browserDouble(initiallyFail=false, reasonCode=1, includeCatalog=true, o
     addEventListener:(key,fn)=>{listeners[key]=fn;}
   };
   let fail = initiallyFail; let status = 200; let requests = 0; let elapsed = 0; let rowData=options.rows;
+  let policyData=options.policy; let generatedAt=1000; const posts=[];
   const timers = new Map(); let nextId = 0;
   const context = vm.createContext({
     document, window:{IngeconPanel:{connected:true},history:{replaceState(){}},location:{pathname:'/'}},
     performance:{now:()=>elapsed}, Date, Set, Map, JSON, Number, Object, String, URLSearchParams,
     AbortController, TypeError,
+    FormData:class extends Map {
+      constructor() {super([['csrf_token','mock-csrf'],['interval_seconds',elements.get('polling-seconds').value]]);}
+    },
     fetch:async(url,options)=>{
+      if (options.method==='POST') {
+        assert.equal(url,'/monitor/polling'); assert.equal(options.credentials,'same-origin');
+        assert.equal(options.body.get('csrf_token'),'mock-csrf');
+        posts.push(Object.fromEntries(options.body));
+        if (browserOptions.postStatus) return {ok:false,json:async()=>({error:'Налаштування не дозволене.'})};
+        policyData=options.body.get('intent')==='default' ?
+          {temporary:false,interval_seconds:30,expires_at:null} :
+          {temporary:true,interval_seconds:Number(options.body.get('interval_seconds')),expires_at:generatedAt+1800};
+        return {ok:true,json:async()=>({polling:policyData,generated_at:generatedAt,message:'Інтервал збережено; очікується монітор.'})};
+      }
       assert.equal(url,'/api/statuses'); assert.equal(options.credentials,'same-origin');
       assert.equal(options.method,undefined); // Every request is a status GET, never a control POST.
       requests++; if (fail) throw new TypeError('simulated connection loss');
       return {status,ok:status===200,json:async()=>{
         const data=sample(); data.inverters[0].limit_reason_code=reasonCode;
         if (rowData) data.inverters=rowData.map(row=>({...data.inverters[0],...row}));
+        data.generated_at=generatedAt;
+        if (policyData) data.polling=policyData;
         return data;
       }};
     },
     setTimeout:(fn,ms)=>{const id=++nextId;timers.set(id,{fn,ms});return id;},
     clearTimeout:id=>timers.delete(id), setInterval:fn=>{context.tick=fn;}
   });
+  const browserOptions=options;
   vm.runInContext(fs.readFileSync('static/dashboard.js','utf8'),context);
   return {elements,document,listeners,timers,countElements,context,sortButtons,setRows:rows=>{rowData=rows;},
+    posts,advance:milliseconds=>{elapsed+=milliseconds;},serverTime:value=>{generatedAt=value;},
     fail:()=>{fail=true;}, recover:()=>{fail=false;}, expire:()=>{elapsed=100000;},
     deny:()=>{status=401;}, requests:()=>requests};
 }
 const settle = () => new Promise(resolve=>setImmediate(resolve));
-async function nextPoll(browser) {
-  const entry = [...browser.timers.entries()].find(([,value])=>value.ms===10000);
+async function nextPoll(browser, milliseconds=30000) {
+  const entry = [...browser.timers.entries()].find(([,value])=>value.ms===milliseconds);
   assert.ok(entry,'next poll scheduled');
   browser.timers.delete(entry[0]); entry[1].fn(); await settle();
 }
+
+test('default polling waits 30 seconds; a server override schedules 1-second status GETs', async () => {
+  const normal=browserDouble(); await settle(); await nextPoll(normal,30000);
+  const fast=browserDouble(false,1,true,{policy:{temporary:true,interval_seconds:1,expires_at:2800}});
+  await settle(); await nextPoll(fast,1000);
+  assert.equal(fast.requests(),2);
+  assert.match(fast.elements.get('refresh-label').textContent,/кожні 1 с/);
+});
+
+test('30-minute expiry restores 30 seconds even during API failure and cannot restart a revoked session', async () => {
+  const browser=browserDouble(false,1,true,{policy:{temporary:true,interval_seconds:1,expires_at:2800}});
+  await settle(); browser.fail(); await nextPoll(browser,1000);
+  browser.advance(1800000); browser.context.tick();
+  assert.ok([...browser.timers.values()].some(timer=>timer.ms===30000));
+  assert.ok(![...browser.timers.values()].some(timer=>timer.ms===1000));
+  browser.recover(); browser.deny(); await nextPoll(browser,30000);
+  browser.context.tick(); assert.equal(browser.timers.size,0);
+});
+
+test('long override wakes at expiry; hidden pages resume with the expired policy', async () => {
+  const browser=browserDouble(false,1,true,{policy:{temporary:true,interval_seconds:86400,expires_at:2800}});
+  await settle(); assert.ok([...browser.timers.values()].some(timer=>timer.ms===1800000));
+  browser.document.hidden=true;browser.listeners.visibilitychange();
+  browser.advance(1800000);browser.serverTime(2800);
+  browser.document.hidden=false;browser.listeners.visibilitychange();await settle();
+  assert.ok([...browser.timers.values()].some(timer=>timer.ms===30000));
+});
+
+test('administrator form posts CSRF to the polling handler once, updates cadence and can reset early', async () => {
+  const browser=browserDouble(false,1,true,{pollingControls:true});await settle();
+  const form=browser.elements.get('polling-form');
+  browser.elements.get('polling-seconds').value='1';
+  const event={preventDefault(){},submitter:{value:'temporary'}};
+  const pending=form.listeners.submit(event);form.listeners.submit(event);await pending;await settle();
+  assert.deepEqual(browser.posts,[{csrf_token:'mock-csrf',interval_seconds:'1',intent:'temporary'}]);
+  assert.equal(browser.elements.get('polling-reset').disabled,false);
+  assert.ok([...browser.timers.values()].some(timer=>timer.ms===1000));
+  assert.match(browser.elements.get('polling-feedback').textContent,/очікується монітор/);
+  await form.listeners.submit({preventDefault(){},submitter:{value:'default'}});await settle();
+  assert.equal(browser.posts.length,2);
+  assert.equal(browser.elements.get('polling-reset').disabled,true);
+  assert.ok([...browser.timers.values()].some(timer=>timer.ms===30000));
+});
+
+test('failed polling configuration is shown without claiming success or retrying the POST', async () => {
+  const browser=browserDouble(false,1,true,{pollingControls:true,postStatus:403});await settle();
+  await browser.elements.get('polling-form').listeners.submit({preventDefault(){},submitter:{value:'temporary'}});
+  assert.equal(browser.posts.length,1);
+  assert.equal(browser.elements.get('polling-feedback').className,'notice danger');
+  assert.match(browser.elements.get('polling-feedback').textContent,/не дозволене/);
+  assert.ok([...browser.timers.values()].some(timer=>timer.ms===30000));
+});
 
 function renderedIds(browser) {
   return browser.elements.get('device-rows').children.map(row=>Number(row.dataset.id));

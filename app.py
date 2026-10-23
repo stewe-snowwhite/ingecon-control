@@ -30,6 +30,8 @@ import discovery_bulk  # Registers the saved-results bulk handler before bluepri
 from operation_locks import resource_lock, OperationBusy
 from modbus_config import load_configuration
 from configuration import cookie_secure_from_env, secret_from_env
+import monitor_schedule
+from monitor_web import web as monitor_web
 
 csrf = CSRFProtect()
 ALL_ROLES = ROLES
@@ -74,6 +76,8 @@ def create_app(config=None):
     app.register_blueprint(users_web)
     app.register_blueprint(modbus_web)
     app.register_blueprint(discovery_web)
+    app.register_blueprint(monitor_web)
+    app.config['MONITOR_POLLING_AVAILABLE'] = True
     app.config['DISCOVERY_AVAILABLE'] = True
     app.config['MODBUS_TOOLS_AVAILABLE'] = True
     app.config['MODEL_SELECTION_AVAILABLE'] = True
@@ -186,7 +190,8 @@ def create_app(config=None):
         selected = filters()
         snapshot = dashboard_snapshot(current_statuses(db.session,
             stale_after=app.config['MONITOR_STALE_AFTER_SECONDS']), selected)
-        return render_template('index.html', **snapshot, selected=selected, states=STATES)
+        return render_template('index.html', **snapshot, selected=selected, states=STATES,
+                               polling=monitor_schedule.current())
 
     @app.get('/api/statuses')
     @roles_required(*ALL_ROLES)
@@ -195,7 +200,7 @@ def create_app(config=None):
             stale_after=app.config['MONITOR_STALE_AFTER_SECONDS']), filters())
         for row in snapshot['inverters']:
             row['reason_text'] = explain_reason(row['reason'])
-        return jsonify(dict(snapshot, generated_at=time.time()))
+        return jsonify(dict(snapshot, generated_at=time.time(), polling=monitor_schedule.current()))
 
     @app.get('/history')
     @roles_required(*ALL_ROLES)

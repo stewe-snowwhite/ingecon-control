@@ -4,12 +4,27 @@
 {% block content %}
 {% from 'limit_reasons.html' import LIMIT_REASONS %}
 <section id="dashboard" data-api="{{ url_for('statuses') }}" data-role="{{ g.user.role }}" data-writes="{{ 'true' if config.MODBUS_WRITES_ENABLED else 'false' }}" data-limit-reasons="{{ LIMIT_REASONS | tojson | forceescape }}">
-<div class="page-heading"><div><p class="eyebrow">ОГЛЯД СИСТЕМИ</p><h1>Інвертори</h1><p class="muted">Доступність, зв’язок та останні результати перевірок.</p></div><div class="live-note"><span class="live-dot"></span><span id="refresh-label">Оновлення кожні 10 секунд</span></div></div>
+<div class="page-heading"><div><p class="eyebrow">ОГЛЯД СИСТЕМИ</p><h1>Інвертори</h1><p class="muted">Доступність, зв’язок та останні результати перевірок.</p></div><div class="live-note"><span class="live-dot"></span><span id="refresh-label">Оновлення кожні 30 секунд</span></div></div>
 <div class="summary" aria-label="Загальна статистика">{% for key, label in [('total','Усього інверторів'), ('Online','Online'), ('Offline','Offline'), ('Degraded','Degraded'), ('Unknown','Unknown')] %}
 <article class="summary-card {{ key | lower }}"><span class="summary-label">{{ label }}</span><strong data-count="{{ key }}">{{ counts[key] }}</strong><small>{{ 'У всіх групах' if key == 'total' else 'Поточний ефективний стан' }}</small></article>{% endfor %}</div>
 <section class="monitor-strip" aria-label="Стан монітора"><div><span id="heartbeat" class="badge {{ 'online' if monitor.alive else 'unknown' }}">{{ 'Монітор активний' if monitor.alive else 'Монітор неактивний або дані застарілі' }}</span><span id="heartbeat-time" class="muted">Heartbeat (UTC): {{ monitor.last_seen | utc_time }}</span></div><span id="monitor-detail" class="muted">Інтервал {{ monitor.interval_seconds }} с · Актуальність {{ monitor.stale_after_seconds }} с</span></section>
 <p id="connection-warning" class="notice warning" role="status" {% if monitor.alive %}hidden{% endif %}>Монітор неактивний або дані застарілі. Статуси показано як Unknown.</p>
 <p id="api-warning" class="notice danger" role="alert" hidden></p>
+{% if config.get('MONITOR_POLLING_AVAILABLE', False) %}
+<section class="surface" aria-label="Інтервал опитування">
+<h2>Оновлення даних інверторів</h2>
+<p id="polling-status" class="muted" aria-live="polite">Опитування: {{ polling.interval_seconds }} с. {% if polling.temporary %}Тимчасово до {{ polling.expires_at | utc_time }} UTC; потім — 30 с.{% else %}За замовчуванням — 30 с.{% endif %}</p>
+{% if g.user.role == 'Administrator' %}
+<form id="polling-form" class="filters" method="POST" action="{{ url_for('monitor_web.polling') }}">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<label>Інтервал, с<input id="polling-seconds" type="number" name="interval_seconds" min="1" max="86400" step="1" value="{{ polling.interval_seconds }}" required></label>
+<button class="button primary" id="polling-apply" type="submit" name="intent" value="temporary">Застосувати на 30 хв</button>
+<button class="button" id="polling-reset" type="submit" name="intent" value="default" formnovalidate {% if not polling.temporary %}disabled{% endif %}>Повернути 30 с</button>
+</form>
+<p class="muted">Від 1 до 86400 с для всіх інверторів. Через 30 хвилин автоматично повернеться 30 с. Якщо цикл читання триває довше, наступний почнеться після його завершення.</p>
+<p id="polling-feedback" class="notice info" role="status" hidden></p>
+{% endif %}</section>
+{% endif %}
 <section class="surface"><div class="section-heading"><div><h2>Пристрої</h2><p id="list-count" class="muted">Показано {{ inverters | length }} із {{ counts.total }}</p></div></div>
 <form id="filters" class="filters" method="GET">
 <label class="search-field">Пошук<input id="search" type="search" name="q" maxlength="100" value="{{ selected.q }}" placeholder="Назва, IP або група" autocomplete="off"></label>

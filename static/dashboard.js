@@ -36,6 +36,14 @@
   function formatPower(watts) {
     return Number.isFinite(watts) ? (watts / 1000).toFixed(2).replace('.', ',') + ' кВт' : '—';
   }
+  function pollingPolicy(snapshot, now) {
+    const policy = snapshot && snapshot.polling;
+    const active = policy && policy.temporary === true &&
+      Number.isInteger(policy.interval_seconds) && policy.interval_seconds >= 1 && policy.interval_seconds <= 86400 &&
+      Number.isFinite(policy.expires_at) && policy.expires_at > now;
+    return {interval_seconds: active ? policy.interval_seconds : 30,
+      expires_at: active ? policy.expires_at : null, temporary: !!active};
+  }
   function formatLimitReason(code, catalog) {
     if (!Number.isInteger(code)) return {label: '—', hint: ''};
     // Cached pre-upgrade HTML has no catalog until the web worker is restarted.
@@ -63,6 +71,7 @@
   function validSnapshot(snapshot) {
     return snapshot && Number.isFinite(snapshot.generated_at) && snapshot.monitor &&
       typeof snapshot.monitor.alive === 'boolean' &&
+      Number.isFinite(snapshot.monitor.interval_seconds) && snapshot.monitor.interval_seconds > 0 &&
       Number.isFinite(snapshot.monitor.stale_after_seconds) && snapshot.monitor.stale_after_seconds > 0 &&
       (snapshot.monitor.last_seen === null || Number.isFinite(snapshot.monitor.last_seen)) &&
       Array.isArray(snapshot.inverters) && snapshot.inverters.every(row =>
@@ -73,7 +82,7 @@
         ['icmp', 'tcp', 'modbus'].every(key => row.checks[key] &&
           [true, false, null].includes(row.checks[key].ok)));
   }
-  const model = {formatUtc, formatPower, formatLimitReason, filterRows, sortRows, counts, freshSnapshot, validSnapshot};
+  const model = {formatUtc, formatPower, formatLimitReason, pollingPolicy, filterRows, sortRows, counts, freshSnapshot, validSnapshot};
   if (typeof module !== 'undefined' && module.exports) module.exports = model;
   if (typeof document === 'undefined') return;
   const root = document.getElementById('dashboard');
@@ -90,6 +99,9 @@
   let refreshRequested = false;
   let stopped = false;
   let digest = '';
+  let refreshEvery = 30000;
+  let policyExpiry = null;
+  let settingsPending = false;
   const inputs = {q: el('search'), group: el('group-filter'), state: el('state-filter')};
   const sorting = {key: '', direction: 'asc'};
   const sortButtons = [...root.querySelectorAll('[data-sort-key]')];
@@ -158,7 +170,25 @@
   function render() {
     if (!snapshot) return;
     // Use the server clock plus monotonic elapsed time, independent of the browser timezone/clock.
-    const current = freshSnapshot(snapshot, snapshot.generated_at + (performance.now() - receivedAt) / 1000);
+    const now = snapshot.generated_at + (performance.now() - receivedAt) / 1000;
+    const policy = pollingPolicy(snapshot, now);
+    policyExpiry = policy.expires_at;
+    const nextInterval = policy.interval_seconds * 1000;
+    if (refreshEvery !== nextInterval) {
+      refreshEvery = nextInterval;
+      if (!fetching && !stopped && !document.hidden) scheduleRefresh();
+    }
+    if (el('polling-status')) {
+      const remaining = policy.temporary ? Math.ceil((policy.expires_at-now)/60) : 0;
+      el('polling-status').textContent = 'Запитаний інтервал опитування: ' + policy.interval_seconds + ' с. ' +
+        (policy.temporary ? 'Залишилося до ' + remaining + ' хв; потім — 30 с. ' : 'За замовчуванням — 30 с. ') +
+        'Період монітора з урахуванням тривалості циклу: ' + Number(snapshot.monitor.interval_seconds.toFixed(1)) + ' с.';
+      if (snapshot.polling?.error) el('polling-status').textContent += ' Помилка налаштування; використовується 30 с.';
+    }
+    if (el('polling-reset')) el('polling-reset').disabled = settingsPending || !policy.temporary;
+    if (el('polling-seconds') && document.activeElement !== el('polling-seconds')) el('polling-seconds').value = String(policy.interval_seconds);
+    if (panel.connected) el('refresh-label').textContent = 'Оновлено · ' + formatUtc(snapshot.generated_at) + ' UTC · кожні ' + policy.interval_seconds + ' с';
+    const current = freshSnapshot(snapshot, now);
     const summary = counts(current.inverters);
     document.querySelectorAll('[data-count]').forEach(item => { item.textContent = summary[item.dataset.count]; });
     const monitor = current.monitor;
@@ -240,6 +270,36 @@
   el('sort-key')?.addEventListener('change', () => setSort(el('sort-key').value, 'asc'));
   el('sort-direction')?.addEventListener('change', () => setSort(sorting.key, el('sort-direction').value));
 
+  el('polling-form')?.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (settingsPending) return;
+    const form = el('polling-form');
+    const data = new FormData(form);
+    data.set('intent', event.submitter?.value || 'temporary');
+    const feedback = el('polling-feedback');
+    settingsPending = true; el('polling-apply').disabled = true; el('polling-reset').disabled = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch(form.getAttribute('action'), {method:'POST',body:data,
+        credentials:'same-origin',headers:{Accept:'application/json'},signal:controller.signal});
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Не вдалося зберегти інтервал.');
+      if (!result.polling || !Number.isFinite(result.generated_at)) throw new Error('Некоректна відповідь сервера.');
+      if (snapshot) { snapshot = {...snapshot, polling:result.polling}; render(); }
+      feedback.textContent = result.message; feedback.className = 'notice info';
+      refresh();
+    } catch (error) {
+      feedback.textContent = error.name === 'AbortError' || error instanceof TypeError || error instanceof SyntaxError ?
+        'Не вдалося підтвердити зміну інтервалу. Оновіть сторінку, щоб перевірити налаштування.' : error.message;
+      feedback.className = 'notice danger';
+    } finally {
+      clearTimeout(timeout); settingsPending = false; el('polling-apply').disabled = false;
+      el('polling-reset').disabled = !snapshot || !pollingPolicy(snapshot, snapshot.generated_at+(performance.now()-receivedAt)/1000).temporary;
+      feedback.hidden = false;
+    }
+  });
+
   function updateGroups() {
     const value = inputs.group.value;
     const groups = [...new Set(snapshot.inverters.map(row => row.group))].sort();
@@ -270,6 +330,12 @@
     el('device-rows').querySelectorAll('td[data-label="Ліміт"]').forEach(cell => { cell.textContent = '—'; });
     el('device-rows').querySelectorAll('[data-telemetry]').forEach(cell => { cell.textContent = '—'; });
   }
+  function scheduleRefresh() {
+    clearTimeout(timer);
+    const now = snapshot ? snapshot.generated_at+(performance.now()-receivedAt)/1000 : 0;
+    const delay = policyExpiry === null ? refreshEvery : Math.min(refreshEvery, Math.max(1, (policyExpiry-now)*1000));
+    timer = setTimeout(refresh, refreshRequested ? 0 : delay); refreshRequested = false;
+  }
   async function refresh() {
     if (document.hidden || stopped) return;
     if (fetching) { refreshRequested = true; return; }
@@ -283,24 +349,23 @@
         stopped = true; panel.connected = false;
         throw new Error('Сесію завершено або доступ відкликано. Увійдіть знову.');
       }
-      if (!response.ok) throw new Error('Сервер не повернув статуси. Повторна спроба через 10 секунд.');
+      if (!response.ok) throw new Error('Сервер не повернув статуси. Повторна спроба через ' + refreshEvery/1000 + ' с.');
       const data = await response.json();
       if (!validSnapshot(data)) throw new Error('Некоректна відповідь API. Останній знімок може бути застарілим.');
       snapshot = data; receivedAt = performance.now(); panel.connected = true;
       updateGroups(); render(); el('api-warning').hidden = true;
-      el('refresh-label').textContent = 'Оновлено · ' + formatUtc(data.generated_at) + ' UTC';
     } catch (error) {
       panel.connected = false;
       el('api-warning').textContent = error instanceof SyntaxError ?
         'Сервер повернув некоректну відповідь. Показано останній знімок.' :
         error.name === 'AbortError' || error instanceof TypeError ?
-        'Втрачено зв’язок із сервером. Показано останній знімок; перевіряємо знову через 10 секунд.' : error.message;
+        'Втрачено зв’язок із сервером. Показано останній знімок; повторна спроба через ' + refreshEvery/1000 + ' с.' : error.message;
       el('api-warning').hidden = false; el('refresh-label').textContent = 'Автооновлення недоступне';
       if (snapshot) render(); else markInitialUnknown();
     } finally {
       clearTimeout(timeout); fetching = false;
       if (!stopped && !document.hidden) {
-        timer = setTimeout(refresh, refreshRequested ? 0 : 10000); refreshRequested = false;
+        scheduleRefresh();
       }
     }
   }

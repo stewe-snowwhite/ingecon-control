@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from models import Inverter, MonitorConfig, MonitorHeartbeat
 from monitoring import NetworkProbes, apply_observation, target_for
 from operation_locks import resource_lock
+import monitor_schedule
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ class MonitorWorker:
         self.engine = engine
         self.probes = probes or NetworkProbes()
         self.interval = interval
+        self.base_interval = interval
         self.stop_event = stop_event or threading.Event()
         self.clock = clock
         self.monotonic = monotonic
@@ -39,6 +41,9 @@ class MonitorWorker:
     def _flush(self, observations, *, duration=None, error=None, stopped=False):
         # Network work is done before entering this short write transaction.
         with Session(self.engine) as session, session.begin():
+            heartbeat = session.get(MonitorHeartbeat, 1)
+            measured = duration if duration is not None else (heartbeat.cycle_duration_seconds if heartbeat else 0)
+            actual_interval = measured+1 if measured >= self.interval else self.interval
             for observation in observations:
                 inv = session.get(Inverter, observation.target.inverter_id)
                 if inv is None:
@@ -46,10 +51,9 @@ class MonitorWorker:
                 config = session.get(MonitorConfig, inv.id)
                 if target_for(inv, config).key != observation.target.key:
                     continue  # Target edited while a network request was in flight.
-                apply_observation(session, inv, observation, self.interval*3)
+                apply_observation(session, inv, observation, actual_interval*3)
                 if config and config.requested_at is not None and config.requested_at <= observation.checked_at:
                     config.requested_at = None
-            heartbeat = session.get(MonitorHeartbeat, 1)
             if heartbeat is None:
                 heartbeat = MonitorHeartbeat(id=1, owner=self.owner, started_at=self.started_at,
                                              last_seen=self.clock(), interval_seconds=self.interval,
@@ -58,13 +62,14 @@ class MonitorWorker:
             heartbeat.owner = self.owner
             heartbeat.started_at = self.started_at
             heartbeat.last_seen = self.clock()
-            heartbeat.interval_seconds = self.interval
+            heartbeat.interval_seconds = actual_interval
             heartbeat.last_error = error
             heartbeat.stopped = stopped
             if duration is not None:
                 heartbeat.cycle_duration_seconds = duration
 
     def run_cycle(self):
+        self._refresh_interval()
         start = self.monotonic()
         # Release the read transaction before network probes.
         with Session(self.engine) as session:
@@ -81,12 +86,34 @@ class MonitorWorker:
                 break
             pending.append(self.probes.poll(target))
             if self.monotonic()-last_flush >= self.interval:
-                self._flush(pending)
+                self._flush(pending, duration=self.monotonic()-start)
                 pending = []
                 last_flush = self.monotonic()
         duration = self.monotonic()-start
         self._flush(pending, duration=duration)
         return duration
+
+    def _refresh_interval(self):
+        # Read a tiny shared file. Expiry needs no writes, service restart or web session.
+        interval = monitor_schedule.current(now=self.clock(), default=self.base_interval)['interval_seconds']
+        if interval != self.interval:
+            self.interval = interval
+            if self._has_started:
+                # Publish a longer freshness window before entering a longer sleep.
+                self._flush([])
+
+    def _wait_for_next_cycle(self, started, completed):
+        while not self.stop_event.is_set():
+            self._refresh_interval()
+            # Re-read once a second so shorter intervals and 30-minute expiry take
+            # effect even while waiting on a much longer configured interval.
+            deadline = started+self.interval
+            if deadline <= completed:
+                deadline = completed+1
+            delay = deadline-self.monotonic()
+            if delay <= 0:
+                return
+            self.stop_event.wait(min(1, delay))
 
     def run(self, once=False):
         database = str(Path(self.engine.url.database).resolve()) if self.engine.url.database != ':memory:' else ':memory:'
@@ -113,8 +140,7 @@ class MonitorWorker:
                     if once:
                         break
                     # No catch-up burst or parallel cycles when polling overruns.
-                    delay = max(1, self.interval-(self.monotonic()-start))
-                    self.stop_event.wait(delay)
+                    self._wait_for_next_cycle(start, self.monotonic())
             finally:
                 try:
                     self._flush([], stopped=True, error='monitor_cycle_error' if last_error else None)
