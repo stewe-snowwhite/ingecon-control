@@ -29,4 +29,6 @@ def settings():
             return redirect(url_for('telegram_web.settings'))
         else:
             abort(400,'Некоректна дія Telegram.')
-    return render_template('telegram.html',link=store.web_link(g.user.id),code=code)
+    link = store.web_link(g.user.id)
+    return render_template('telegram.html',link=link,code=code,
+                           link_valid=link is not None and link.user_version==g.user.session_version)

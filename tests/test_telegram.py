@@ -174,7 +174,7 @@ def test_private_chat_only(tg,kind):
     assert tg.store.redeem(1001,code)[0]=='admin'
 
 
-@pytest.mark.parametrize('change',['inactive','deleted','password','logout-version'])
+@pytest.mark.parametrize('change',['inactive','deleted','password','explicit-version-revoke'])
 def test_live_authorization_rechecked(tg,change):
     tg.link()
     with Session(tg.engine) as session,session.begin():
@@ -196,6 +196,23 @@ def test_duplicate_updates_persist_across_store_restart(tg):
     restarted = TelegramStore(tg.engine,clock=lambda:tg.clock[0])
     assert not restarted.accept_update(tg.bot.id,50,1001)
     assert restarted.accept_update(tg.bot.id+1,50,1001)
+
+
+def test_pairing_survives_new_engine_dispatcher_and_bot_with_mock_api(tg,modbus):
+    tg.link();tg.store.preferences(1001,'notifications')
+    restarted_engine=create_engine(str(tg.engine.url))
+    api=FakeTelegramSession();bot=Bot(FAKE_TOKEN,session=api)
+    try:
+        store=TelegramStore(restarted_engine,clock=lambda:tg.clock[0])
+        store.recover();store.cleanup()
+        assert store.identity(1001)==('admin','Administrator')
+        update=Update.model_validate(dict(update_id=501,message=dict(message_id=501,date=100000,
+            chat=dict(id=1001,type='private'),from_user=dict(id=1001,is_bot=False,first_name='Mock'),text='/status')))
+        asyncio.run(build_dispatcher(store).feed_update(bot,update))
+        assert 'Online: 3' in api.messages[-1].text
+        assert store.web_link(1).notifications and modbus[1]==[]
+    finally:
+        asyncio.run(bot.session.close());restarted_engine.dispose()
 
 
 @pytest.mark.parametrize('role',['Administrator','Operator','Viewer'])

@@ -5,7 +5,7 @@ import re
 import secrets
 import time
 
-from sqlalchemy import case, delete, func, select, update
+from sqlalchemy import case, delete, func, inspect, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import sessionmaker
 
@@ -63,9 +63,14 @@ class TelegramStore:
         return payload
 
     def user(self, session, telegram_id):
-        link = session.get(TelegramLink, telegram_id)
-        user = session.get(User, link.user_id) if link else None
-        if (not positive_id(telegram_id) or not link or not user or not user.active or
+        pair = None
+        if positive_id(telegram_id):
+            # One SQLite snapshot avoids mixing old pairing and new account
+            # versions during a concurrent web logout; refresh cached ORM rows.
+            pair = session.execute(select(TelegramLink, User).join(User, User.id==TelegramLink.user_id)
+                .where(TelegramLink.telegram_id==telegram_id).execution_options(populate_existing=True)).first()
+        link, user = pair if pair else (None, None)
+        if (not link or not user or not user.active or
             user.role not in ('Administrator','Operator','Viewer') or link.user_version != user.session_version):
             raise TelegramAccess('Спочатку отримайте код у вебпанелі: Налаштування → Telegram → Створити код. Надішліть /start КОД у приватному чаті.')
         return link, user
@@ -109,6 +114,20 @@ class TelegramStore:
     def unlink(self, user_id):
         with self.sessions.begin() as session:
             self.revoke_user(session, user_id)
+
+    @staticmethod
+    def preserve_on_web_logout(session, user_id, previous_version, next_version):
+        """Caller first rotates User atomically, in this same write transaction.
+
+        Carry forward only currently valid pairings/codes. A password-revoked
+        or otherwise stale record must never be reauthorized by a web logout.
+        No pairing timestamp, notification preference or code expiry is reset.
+        """
+        schema = inspect(session.connection())
+        for model in (TelegramLink, TelegramLinkCode):
+            if schema.has_table(model.__tablename__):
+                session.execute(update(model).where(model.user_id==user_id,
+                    model.user_version==previous_version).values(user_version=next_version))
 
     @staticmethod
     def revoke_user(session, user_id):

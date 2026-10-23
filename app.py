@@ -32,6 +32,7 @@ from modbus_config import load_configuration
 from configuration import cookie_secure_from_env, secret_from_env
 import monitor_schedule
 from monitor_web import web as monitor_web
+from telegram_store import TelegramStore
 
 csrf = CSRFProtect()
 ALL_ROLES = ROLES
@@ -166,8 +167,24 @@ def create_app(config=None):
     @roles_required(*ALL_ROLES)
     def logout():
         # Revoke signed cookies for every session of this user, including copies.
-        g.user.session_version += 1
-        db.session.commit()
+        # The compare-and-swap prevents a concurrent password change from being
+        # mistaken for this logout and reviving a revoked Telegram pairing.
+        previous_version = session['session_version']
+        try:
+            next_version = db.session.scalar(update(User).where(User.id==g.user.id,
+                User.active.is_(True), User.role.in_(ALL_ROLES), User.session_version==previous_version)
+                .values(session_version=User.session_version+1).returning(User.session_version))
+            if next_version is None:
+                db.session.rollback()
+                session.clear()
+                g.user = None
+                abort(401)
+            TelegramStore.preserve_on_web_logout(db.session, g.user.id, previous_version, next_version)
+            db.session.commit()
+        except SQLAlchemyError:
+            db.session.rollback()
+            g.user = None
+            abort(503, 'Не вдалося завершити вихід. Повторіть дію пізніше.')
         session.clear()
         return redirect(url_for('login'))
 
