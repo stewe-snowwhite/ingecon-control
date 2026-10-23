@@ -13,6 +13,10 @@ from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMa
 from sqlalchemy.exc import SQLAlchemyError
 
 from telegram_store import TelegramAccess
+from commands import MAX_CONTROL_TARGETS
+
+MESSAGE_PART_LIMIT = 3500  # Conservative UTF-16 budget below Telegram's text limit.
+SEND_PART_DELAY = 1
 
 log = logging.getLogger('ingecon.telegram')
 HELP = ('Команди: /start, /status, /inverters, /groups, /history, /help.\n'
@@ -75,8 +79,34 @@ def menu(role, controls_enabled=False):
 
 
 async def send(bot, telegram_id, text, markup=None):
-    return await bot.send_message(chat_id=telegram_id,text=text,reply_markup=markup,parse_mode=None,
-        link_preview_options=LinkPreviewOptions(is_disabled=True),protect_content=True)
+    parts = message_parts(text)
+    for index,part in enumerate(parts):
+        if index:
+            await asyncio.sleep(SEND_PART_DELAY)
+        # Confirmation appears only after the full target list was delivered.
+        result = await bot.send_message(chat_id=telegram_id,text=part,
+            reply_markup=markup if index==len(parts)-1 else None,parse_mode=None,
+            link_preview_options=LinkPreviewOptions(is_disabled=True),protect_content=True)
+    return result
+
+
+def message_parts(text, limit=MESSAGE_PART_LIMIT):
+    """Preserve every character, prefer complete lines, never split a code point."""
+    if type(limit) is not int or not 2 <= limit <= MESSAGE_PART_LIMIT:
+        raise ValueError('Invalid message budget')
+    parts, buffer, size = [], [], 0
+    for line in text.splitlines(keepends=True):
+        units = sum(2 if ord(char)>0xffff else 1 for char in line)
+        if buffer and size+units>limit:
+            parts.append(''.join(buffer));buffer=[];size=0
+        for char in line:
+            units = 2 if ord(char)>0xffff else 1
+            if size+units>limit:
+                parts.append(''.join(buffer));buffer=[];size=0
+            buffer.append(char);size+=units
+    if buffer:
+        parts.append(''.join(buffer))
+    return parts or [text]
 
 
 class UpdateGate(BaseMiddleware):
@@ -145,8 +175,8 @@ def build_dispatcher(store):
         if nav: buttons.append(nav)
         if kind=='a':
             _,role=store.identity(telegram_id)
-            if len(snapshot)>10 and role in ('Administrator','Operator'):
-                text += '\nДля групової команди максимум 10 цілей; виберіть інвертор або меншу групу.'
+            if len(snapshot)>MAX_CONTROL_TARGETS and role in ('Administrator','Operator'):
+                text += f'\nСпільна межа системи — {MAX_CONTROL_TARGETS} пристроїв на команду; виберіть меншу групу.'
             elif snapshot and role in ('Administrator','Operator'):
                 text += '\nКоманди нижче стосуються всієї групи «Усі», включно з іншими сторінками.'
                 suffix = '' if store.controls_enabled else ' 🔒'
@@ -249,7 +279,7 @@ def build_dispatcher(store):
                 value = int(parts[4]) if len(parts)==5 else 100
                 intent,payload = store.prepare(telegram_id,parts[1],parts[2],int(parts[3]),value)
                 label = {'on':'START', 'off':'STOP', 'limit':f'ЛІМІТ {value}%', 'limit_max':'МАКСИМУМ 100%'}[parts[1]]
-                text = ('Підтвердьте '+label+' для точного списку:\n'+
+                text = ('Підтвердьте '+label+f" для точного списку ({len(payload['targets'])} пристроїв):\n"+
                     target_lines(payload)+
                     '\nДійсне 120 секунд, одноразове. '+control_note()+
                     (' Дозволені команди виконують реальний Modbus-запис.' if store.controls_enabled else ''))

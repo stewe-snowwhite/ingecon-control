@@ -6,6 +6,8 @@ import inverter_controls
 from sqlalchemy.orm import object_session
 from models import MonitorConfig
 
+MAX_CONTROL_TARGETS = 100  # Existing shared command boundary for web and Telegram.
+
 
 class ControlBlocked(ValueError):
     pass
@@ -51,7 +53,7 @@ def execute_devices(user, action, inverters, value=100, *, writes_enabled=False,
         raise ControlBlocked('Недостатньо прав для керування.')
     if action not in ('on','off','limit','limit_max') or type(value) is not int or not 1 <= value <= 100:
         raise ValueError('Некоректна команда або відсоток потужності.')
-    if not 1 <= len(inverters) <= 100 or len({inv.id for inv in inverters}) != len(inverters):
+    if not 1 <= len(inverters) <= MAX_CONTROL_TARGETS or len({inv.id for inv in inverters}) != len(inverters):
         raise ValueError('Некоректний список інверторів.')
     reason = block_reason(writes_enabled=writes_enabled, source=source, telegram_policy=telegram_policy)
     if reason:

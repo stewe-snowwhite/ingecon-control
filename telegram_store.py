@@ -9,7 +9,7 @@ from sqlalchemy import case, delete, func, inspect, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.orm import sessionmaker
 
-from commands import ControlBlocked, command_payload, execute_devices, transports_for
+from commands import MAX_CONTROL_TARGETS, ControlBlocked, command_payload, execute_devices, transports_for
 import inverter_controls
 from models import (User, Inverter, StateEvent, TelegramLinkCode, TelegramLink,
                     TelegramCommand, CommandAudit, TelegramDelivery, TelegramUpdate, TelegramRate)
@@ -210,11 +210,11 @@ class TelegramStore:
         if kind == 'a':
             if type(target) is not int or target != 0:
                 raise TelegramAccess('Некоректна ціль.')
-            rows = session.scalars(select(Inverter).order_by(Inverter.id).limit(11)).all()
+            rows = session.scalars(select(Inverter).order_by(Inverter.id).limit(MAX_CONTROL_TARGETS+1)).all()
             if not rows:
                 raise TelegramAccess('Група «Усі» порожня.')
-            if len(rows)>10:
-                raise TelegramAccess('Максимум 10 цілей у Telegram-підтвердженні. Виберіть окремий інвертор або меншу групу.')
+            if len(rows)>MAX_CONTROL_TARGETS:
+                raise TelegramAccess(f'Спільна межа системи — {MAX_CONTROL_TARGETS} пристроїв на команду. Виберіть меншу групу.')
             return rows, None
         if kind not in ('i','g') or not positive_id(target):
             raise TelegramAccess('Некоректна ціль.')
@@ -222,10 +222,10 @@ class TelegramStore:
         if not inverter:
             raise TelegramAccess('Інвертор або групу не знайдено.')
         group = inverter.group if kind=='g' else None
-        rows = (session.scalars(select(Inverter).where(Inverter.group==group).order_by(Inverter.id).limit(11)).all()
+        rows = (session.scalars(select(Inverter).where(Inverter.group==group).order_by(Inverter.id).limit(MAX_CONTROL_TARGETS+1)).all()
                 if group is not None else [inverter])
-        if len(rows)>10:
-            raise TelegramAccess('Максимум 10 цілей у Telegram-підтвердженні. Виберіть окремий інвертор.')
+        if len(rows)>MAX_CONTROL_TARGETS:
+            raise TelegramAccess(f'Спільна межа системи — {MAX_CONTROL_TARGETS} пристроїв на команду. Виберіть меншу групу.')
         return rows, group
 
     def prepare(self, telegram_id, action, kind, target, value=100):

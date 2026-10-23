@@ -79,7 +79,7 @@ def test_all_is_virtual_covers_both_groups_and_shows_per_device_power(tg,modbus)
     assert tg.store.inventory(1001,'g')==before and modbus[1]==[]
 
 
-def test_all_pages_include_every_device_without_expanding_command_limit(tg,modbus):
+def test_all_pages_include_every_device_and_can_preview_the_entire_fleet(tg,modbus):
     tg.link()
     with Session(tg.engine) as session,session.begin():
         session.add_all(Inverter(id=n,name=f'Mock {n}',group='C',ip_address=f'192.0.2.{n}') for n in range(4,26))
@@ -89,10 +89,12 @@ def test_all_pages_include_every_device_without_expanding_command_limit(tg,modbu
         message=tg.api.messages[-1]
         found += [int(value) for value in re.findall(r'^#(\d+) ',message.text,re.M)]
         assert 'Обладнання: 25' in message.text
-        assert 'максимум 10 цілей' in message.text
-        assert 'act:on:a:0' not in message.reply_markup.model_dump_json()
+        assert 'максимум 10 цілей' not in message.text
+        assert 'act:on:a:0' in message.reply_markup.model_dump_json()
     assert found==list(range(1,26))
-    with pytest.raises(TelegramAccess,match='Максимум 10'):tg.store.prepare(1001,'on','a',0)
+    intent,payload=tg.store.prepare(1001,'on','a',0)
+    assert len(payload['targets'])==25
+    assert tg.store.confirm(1001,intent,cancel=True)[0]=='cancelled'
     assert modbus[1]==[]
 
 

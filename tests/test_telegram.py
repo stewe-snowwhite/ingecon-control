@@ -466,7 +466,7 @@ def test_forged_callback_data_never_controls_or_leaks(tg,modbus,data):
     assert modbus[1]==[]
 
 
-def test_pagination_and_large_group_limit(tg):
+def test_pagination_and_large_group_preview(tg,modbus):
     tg.link()
     with Session(tg.engine) as session,session.begin():
         for index in range(4,15):
@@ -476,7 +476,8 @@ def test_pagination_and_large_group_limit(tg):
     tg.feed(data='list:i:1')
     assert '#9 Mock 9' in tg.api.messages[-1].text
     tg.feed(data='act:on:g:1')
-    assert 'Максимум 10' in tg.api.messages[-1].text
+    assert 'Підтвердьте START' in tg.api.messages[-1].text and '#14 Mock 14' in tg.api.messages[-1].text
+    assert modbus[1]==[]
 
 
 def test_preview_superseded_cleanup_and_unlink_audited(tg):
