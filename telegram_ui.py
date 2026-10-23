@@ -4,12 +4,12 @@ import logging
 import math
 from datetime import datetime, timezone
 
-from aiogram import BaseMiddleware, Dispatcher, Router
+from aiogram import BaseMiddleware, Dispatcher, F, Router
 from aiogram.exceptions import (TelegramAPIError, TelegramBadRequest, TelegramForbiddenError,
                                TelegramNetworkError, TelegramRetryAfter, TelegramUnauthorizedError)
 from aiogram.filters import Command
 from aiogram.types import (CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup,
-                           LinkPreviewOptions, Message)
+                           ForceReply, LinkPreviewOptions, Message)
 from sqlalchemy.exc import SQLAlchemyError
 
 from telegram_store import TelegramAccess
@@ -23,7 +23,8 @@ HELP = ('Команди: /start, /status, /inverters, /groups, /history, /help.\
         '/notifications — налаштування сповіщень. /control — вибір цілей.\n'
         'Прив’язка: у вебпанелі Налаштування → Telegram → Створити код, потім /start КОД у приватному чаті.\n'
         'Статуси тільки з SQLite. Start/Stop — для Administrator/Operator після підтвердження '
-        'і явного дозволу. /limit ID ВІДСОТОК — ліміт 1–100 для інвертора.')
+        'і явного дозволу. Виберіть ціль → «Ввести ліміт» (1–100%) або «Максимум 100%».\n'
+        '/cancel — скасувати ручне введення. /limit ID ВІДСОТОК — ліміт для інвертора.')
 
 
 def clean(value):
@@ -144,6 +145,19 @@ def build_dispatcher(store):
             lines.append(text)
         return '\n'.join(lines)
 
+    def limit_buttons(kind, target):
+        return [('Ввести ліміт',f'input:limit:{kind}:{target}'),
+                ('Максимум 100%',f'act:limit_max:{kind}:{target}')]
+
+    def confirmation(intent, payload):
+        value=payload['value']
+        label={'on':'START','off':'STOP','limit':f'ЛІМІТ {value}%',
+               'limit_max':'МАКСИМУМ 100%'}[payload['action']]
+        text=('Підтвердьте '+label+f" для точного списку ({len(payload['targets'])} пристроїв):\n"+
+              target_lines(payload)+'\nДійсне 120 секунд, одноразове. '+control_note()+
+              (' Дозволені команди виконують реальний Modbus-запис.' if store.controls_enabled else ''))
+        return text,keyboard([[('Підтвердити',f'confirm:{intent}'),('Скасувати',f'cancel:{intent}')]])
+
     def listing(telegram_id, kind, page=0):
         rows, more = store.inventory(telegram_id,'g' if kind=='ng' else 'i' if kind=='a' else kind,page)
         buttons = []
@@ -182,7 +196,7 @@ def build_dispatcher(store):
                 suffix = '' if store.controls_enabled else ' 🔒'
                 buttons.append([('Start: Усі'+suffix,'act:on:a:0'),('Stop: Усі'+suffix,'act:off:a:0')])
                 if store.controls_enabled:
-                    buttons.append([(f'{percent}%',f'act:limit:a:0:{percent}') for percent in (25,50,75,100)])
+                    buttons.append(limit_buttons('a',0))
         if kind=='ng': buttons.append([('Усі групи','pref:all')])
         buttons.append([('Меню','menu:start')])
         return text,keyboard(buttons)
@@ -231,16 +245,21 @@ def build_dispatcher(store):
             if command=='help':
                 await send(bot,telegram_id,HELP)
                 return
+            if command=='cancel':
+                cancelled=store.cancel_limit_input(telegram_id)
+                await send(bot,telegram_id,'Ручне введення скасовано.' if cancelled else
+                    'Немає активного ручного введення. Для готової команди натисніть її кнопку «Скасувати».')
+                return
             if command=='limit':
                 if len(pieces) != 3:
                     raise TelegramAccess('Формат: /limit ID ВІДСОТОК (1–100). Потрібне окреме підтвердження.')
                 intent, payload = store.prepare(telegram_id, 'limit', 'i', int(pieces[1]), int(pieces[2]))
-                text = f"Підтвердьте ліміт {payload['value']}%:\n"+target_lines(payload)
-                text += '\nДійсне 120 секунд, одноразове. '+control_note()
-                await send(bot, telegram_id, text, keyboard([[('Підтвердити',f'confirm:{intent}'),('Скасувати',f'cancel:{intent}')]]))
+                text,markup=confirmation(intent,payload)
+                await send(bot,telegram_id,text,markup)
                 return
             if command=='start' and len(pieces)==2:
                 store.redeem(telegram_id,pieces[1].strip())
+            store.cancel_limit_input(telegram_id)
             if command=='inverters':
                 text,markup = listing(telegram_id,'i')
             elif command=='groups':
@@ -251,6 +270,17 @@ def build_dispatcher(store):
         except ValueError as error:
             await send(bot,telegram_id,str(error) if isinstance(error,TelegramAccess) else 'Некоректна команда. Відкрийте /help.')
 
+    async def limit_input_handler(message, bot):
+        telegram_id=message.from_user.id
+        try:
+            reply_to=message.reply_to_message.message_id if message.reply_to_message else None
+            intent,payload=store.submit_limit_input(telegram_id,message.text,reply_to)
+            text,markup=confirmation(intent,payload)
+            await send(bot,telegram_id,text,markup)
+        except ValueError as error:
+            await send(bot,telegram_id,str(error) if isinstance(error,TelegramAccess) else
+                       'Конфігурація керування недоступна. Зверніться до адміністратора.')
+
     async def callback_handler(call, bot):
         telegram_id = call.from_user.id
         await call.answer()
@@ -260,10 +290,13 @@ def build_dispatcher(store):
             if len(call.data or '')>64:
                 raise TelegramAccess('Некоректна кнопка.')
             if parts[0]=='menu' and len(parts)==2 and parts[1] in ('start','status','history','help','control','notifications'):
+                store.cancel_limit_input(telegram_id)
                 text,markup = screen(telegram_id,parts[1])
             elif parts[0]=='list' and len(parts)==3 and parts[1] in ('i','g','ng','a'):
+                store.cancel_limit_input(telegram_id)
                 text,markup = listing(telegram_id,parts[1],int(parts[2]))
             elif parts[0]=='target' and len(parts)==3:
+                store.cancel_limit_input(telegram_id)
                 with store.sessions() as session:
                     store.user(session,telegram_id)
                     targets,_ = store.targets(session,parts[1],int(parts[2]))
@@ -273,17 +306,24 @@ def build_dispatcher(store):
                     suffix = '' if store.controls_enabled else ' 🔒'
                     rows.insert(0,[('Start'+suffix,f'act:on:{parts[1]}:{parts[2]}'),('Stop'+suffix,f'act:off:{parts[1]}:{parts[2]}')])
                     if store.controls_enabled:
-                        rows.insert(1,[(f'{percent}%', f'act:limit:{parts[1]}:{parts[2]}:{percent}') for percent in (25,50,75,100)])
+                        rows.insert(1,limit_buttons(parts[1],parts[2]))
                 markup = keyboard(rows)
+            elif parts[:2]==['input','limit'] and len(parts)==4:
+                intent,payload=store.request_limit_input(telegram_id,parts[2],int(parts[3]))
+                first=payload['targets'][0]
+                scope=('групи «Усі»' if parts[2]=='a' else f'групи «{clean(first[2])}»' if parts[2]=='g' else
+                       f'інвертора #{first[0]} {clean(first[1])}')
+                prompt=await send(bot,telegram_id,
+                    f"Введіть ліміт потужності для {scope} ({len(payload['targets'])} пристроїв): ціле число 1–100%.\n"
+                    'Наприклад: 37 або 37%. Введення діє 5 хвилин. Скасувати: /cancel.\n'
+                    'Після введення буде окреме підтвердження з повним списком пристроїв.',
+                    ForceReply(selective=True,input_field_placeholder='Ліміт 1–100%'))
+                store.bind_limit_prompt(telegram_id,intent,prompt.message_id)
+                return
             elif parts[0]=='act' and len(parts) in (4,5):
                 value = int(parts[4]) if len(parts)==5 else 100
                 intent,payload = store.prepare(telegram_id,parts[1],parts[2],int(parts[3]),value)
-                label = {'on':'START', 'off':'STOP', 'limit':f'ЛІМІТ {value}%', 'limit_max':'МАКСИМУМ 100%'}[parts[1]]
-                text = ('Підтвердьте '+label+f" для точного списку ({len(payload['targets'])} пристроїв):\n"+
-                    target_lines(payload)+
-                    '\nДійсне 120 секунд, одноразове. '+control_note()+
-                    (' Дозволені команди виконують реальний Modbus-запис.' if store.controls_enabled else ''))
-                markup = keyboard([[('Підтвердити',f'confirm:{intent}'),('Скасувати',f'cancel:{intent}')]])
+                text,markup=confirmation(intent,payload)
             elif parts[0] in ('confirm','cancel') and len(parts)==2:
                 # Bounded device I/O must not pause notification delivery.
                 result,details = await asyncio.to_thread(store.confirm, telegram_id, parts[1], cancel=parts[0]=='cancel')
@@ -309,12 +349,13 @@ def build_dispatcher(store):
                 raise TelegramAccess('Невідома кнопка. Відкрийте /start.')
             await send(bot,telegram_id,text,markup)
         except (ValueError,OverflowError) as error:
-            if parts[0] in ('act','confirm','cancel'):
+            if parts[0] in ('input','act','confirm','cancel'):
                 store.audit_rejected(telegram_id,call.id)
             text = str(error) if isinstance(error,TelegramAccess) else 'Некоректні дані кнопки.'
             await send(bot,telegram_id,text)
 
-    router.message.register(message_handler,Command('start','status','inverters','groups','history','help','notifications','control','limit'))
+    router.message.register(message_handler,Command('start','status','inverters','groups','history','help','notifications','control','limit','cancel'))
+    router.message.register(limit_input_handler,F.text & ~F.text.startswith('/'))
     router.callback_query.register(callback_handler)
 
     @router.errors()

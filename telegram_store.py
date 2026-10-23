@@ -19,6 +19,7 @@ from modbus_config import load_configuration
 import modbus_safety
 
 CODE = re.compile(r'[A-Za-z0-9_-]{32}', re.ASCII)
+LIMIT_INPUT_SECONDS = 300
 NOTIFY_STATES = {'Online':'online', 'Offline':'offline', 'Degraded':'degraded'}
 log = logging.getLogger('ingecon.telegram')
 
@@ -139,12 +140,12 @@ class TelegramStore:
         session.execute(update(TelegramDelivery).where(TelegramDelivery.telegram_id.in_(ids),
             TelegramDelivery.state=='pending').values(state='skipped',error='unlinked'))
         pending = select(TelegramCommand.id).where(TelegramCommand.user_id==user_id,
-                                                   TelegramCommand.state=='awaiting')
+                                                   TelegramCommand.state.in_(('awaiting','input')))
         session.execute(update(CommandAudit).where(CommandAudit.request_id.in_(
             select('tg:'+TelegramCommand.id).where(TelegramCommand.id.in_(pending))))
             .values(result='cancelled'))
         session.execute(update(TelegramCommand).where(TelegramCommand.user_id==user_id,
-            TelegramCommand.state=='awaiting').values(state='cancelled'))
+            TelegramCommand.state.in_(('awaiting','input'))).values(state='cancelled'))
         session.execute(delete(TelegramLink).where(TelegramLink.user_id==user_id))
 
     def web_link(self, user_id):
@@ -237,20 +238,117 @@ class TelegramStore:
                 raise TelegramAccess('Viewer не має права керувати.')
             inverters, group = self.targets(session,kind,target)
             payload = self.control_payload(user,action,inverters,value,all_targets=kind=='a')
-            # Keep an audit of previews, including those superseded without a click.
-            old = select(TelegramCommand.id).where(TelegramCommand.telegram_id==telegram_id,
-                                                 TelegramCommand.state=='awaiting')
-            session.execute(update(CommandAudit).where(CommandAudit.request_id.in_(
-                select('tg:'+TelegramCommand.id).where(TelegramCommand.id.in_(old))))
-                .values(result='superseded'))
-            session.execute(update(TelegramCommand).where(TelegramCommand.id.in_(old)).values(state='cancelled'))
-            intent = secrets.token_hex(12)
-            session.add(TelegramCommand(id=intent,telegram_id=telegram_id,user_id=user.id,
-                payload=payload,group_name=group,expires_at=self.clock()+120))
-            session.add(CommandAudit(request_id='tg:'+intent,source='telegram',telegram_id=telegram_id,
-                user_id=user.id,username=user.username,occurred_at=self.clock(),action=action,
-                targets=payload['targets'],result='awaiting',details=[]))
-            return intent,payload
+            return self._new_intent(session,user,telegram_id,payload,group)
+
+    def _new_intent(self, session, user, telegram_id, payload, group, *, input_request=False):
+        # A new choice supersedes both an old prompt and an old confirmation.
+        old = select(TelegramCommand.id).where(TelegramCommand.telegram_id==telegram_id,
+            TelegramCommand.state.in_(('awaiting','input')))
+        session.execute(update(CommandAudit).where(CommandAudit.request_id.in_(
+            select('tg:'+TelegramCommand.id).where(TelegramCommand.id.in_(old)))).values(result='superseded'))
+        session.execute(update(TelegramCommand).where(TelegramCommand.id.in_(old)).values(state='cancelled'))
+        intent = secrets.token_hex(12)
+        session.add(TelegramCommand(id=intent,telegram_id=telegram_id,user_id=user.id,
+            payload=payload,group_name=group,expires_at=self.clock()+(LIMIT_INPUT_SECONDS if input_request else 120),
+            state='input' if input_request else 'awaiting'))
+        session.add(CommandAudit(request_id='tg:'+intent,source='telegram',telegram_id=telegram_id,
+            user_id=user.id,username=user.username,occurred_at=self.clock(),action=payload['action'],
+            targets=payload['targets'],result='awaiting_input' if input_request else 'awaiting',details=[]))
+        return intent,payload
+
+    def _targets_match(self, session, user, payload, inverters, group):
+        if user.role not in ('Administrator','Operator') or self.control_payload(user,
+                payload['action'],inverters,payload.get('value',100),
+                all_targets=payload.get('target_scope')=='all')!=payload:
+            return False
+        ids=[target[0] for target in payload['targets']]
+        if payload.get('target_scope')=='all':
+            return session.scalars(select(Inverter.id).order_by(Inverter.id)).all()==ids
+        return group is None or session.scalars(select(Inverter.id).where(
+            Inverter.group==group).order_by(Inverter.id)).all()==ids
+
+    def request_limit_input(self, telegram_id, kind, target):
+        with self.sessions.begin() as session:
+            _,user=self.user(session,telegram_id)
+            if user.role not in ('Administrator','Operator'):
+                raise TelegramAccess('Viewer не має права керувати.')
+            if not self.controls_enabled:
+                raise TelegramAccess('Керування лімітом заблоковане конфігурацією.')
+            inverters,group=self.targets(session,kind,target)
+            try:
+                self.control_policy.validate(inverters,'limit')
+            except ValueError as error:
+                raise TelegramAccess(str(error)) from None
+            payload=self.control_payload(user,'limit',inverters,100,all_targets=kind=='a')
+            payload['input_scope']=dict(kind=kind,target=target,prompt_id=None)
+            return self._new_intent(session,user,telegram_id,payload,group,input_request=True)
+
+    def bind_limit_prompt(self, telegram_id, intent, message_id):
+        if not positive_id(message_id):raise TelegramAccess('Некоректний запит введення.')
+        with self.sessions.begin() as session:
+            _,user=self.user(session,telegram_id)
+            row=session.get(TelegramCommand,intent)
+            if not row or row.telegram_id!=telegram_id or row.user_id!=user.id or row.state!='input':
+                raise TelegramAccess('Запит введення вже скасований.')
+            payload=dict(row.payload)
+            payload['input_scope']=dict(payload['input_scope'],prompt_id=message_id)
+            row.payload=payload
+
+    def cancel_limit_input(self, telegram_id):
+        with self.sessions.begin() as session:
+            _,user=self.user(session,telegram_id)
+            ids=session.scalars(select(TelegramCommand.id).where(TelegramCommand.telegram_id==telegram_id,
+                TelegramCommand.user_id==user.id,TelegramCommand.state=='input')).all()
+            if not ids:return False
+            session.execute(update(TelegramCommand).where(TelegramCommand.id.in_(ids)).values(state='cancelled'))
+            session.execute(update(CommandAudit).where(CommandAudit.request_id.in_(['tg:'+value for value in ids]))
+                .values(result='cancelled'))
+            return True
+
+    def submit_limit_input(self, telegram_id, text, reply_to=None):
+        failure=None
+        with self.sessions.begin() as session:
+            _,user=self.user(session,telegram_id)
+            if user.role not in ('Administrator','Operator'):
+                raise TelegramAccess('Viewer не має права керувати.')
+            row=session.scalar(select(TelegramCommand).where(TelegramCommand.telegram_id==telegram_id,
+                TelegramCommand.user_id==user.id,TelegramCommand.state=='input').order_by(TelegramCommand.expires_at.desc()).limit(1))
+            if row is None:raise TelegramAccess('Спочатку виберіть інвертор або групу й натисніть «Ввести ліміт».')
+            scope=row.payload['input_scope']
+            if not positive_id(scope.get('prompt_id')):
+                raise TelegramAccess('Запит введення не готовий. Натисніть «Ввести ліміт» ще раз.')
+            if reply_to is not None and reply_to!=scope['prompt_id']:
+                raise TelegramAccess('Це відповідь на інший запит. Використайте останній запит введення.')
+            if not isinstance(text,str) or not re.fullmatch(r'(?:[1-9][0-9]?|100)\s*%?',text.strip(),re.ASCII):
+                raise TelegramAccess('Введіть ціле число від 1 до 100, наприклад 37 або 37%. Для скасування — /cancel.')
+            value=int(text.strip().rstrip('%').strip())
+            claimed=session.execute(update(TelegramCommand).where(TelegramCommand.id==row.id,
+                TelegramCommand.state=='input').values(state='input_claimed')).rowcount
+            if not claimed:raise TelegramAccess('Цей запит введення вже використаний.')
+            session.expire_all()
+            _,user=self.user(session,telegram_id)
+            payload={key:value for key,value in row.payload.items() if key!='input_scope'}
+            ids=[target[0] for target in payload['targets']]
+            inverters=session.scalars(select(Inverter).where(Inverter.id.in_(ids)).order_by(Inverter.id)).all()
+            try:
+                matches=self.controls_enabled and self._targets_match(session,user,payload,inverters,row.group_name)
+            except ValueError:
+                matches=False  # A malformed/revoked configuration never authorizes input.
+            if row.expires_at<=self.clock():
+                result='expired';failure='Час введення минув. Натисніть «Ввести ліміт» ще раз.'
+            elif not matches:
+                result='invalidated';failure='Права, конфігурація або список пристроїв змінилися. Виберіть ціль ще раз.'
+            else:
+                result='awaiting'
+                payload=dict(payload,value=value)
+                row.payload=payload
+                row.expires_at=self.clock()+120
+            row.state=result
+            session.execute(update(CommandAudit).where(CommandAudit.request_id=='tg:'+row.id)
+                .values(result=result,occurred_at=self.clock()))
+            intent=row.id
+        if failure:raise TelegramAccess(failure)
+        return intent,payload
 
     def confirm(self, telegram_id, intent, cancel=False):
         now = self.clock()
@@ -272,15 +370,7 @@ class TelegramStore:
                 result = 'expired'
             elif cancel:
                 result = 'cancelled'
-            elif (user.role not in ('Administrator','Operator') or
-                  self.control_payload(user,payload['action'],inverters,payload.get('value',100),
-                      all_targets=payload.get('target_scope')=='all')!=payload):
-                result = 'invalidated'
-            elif payload.get('target_scope')=='all' and session.scalars(select(Inverter.id)
-                    .order_by(Inverter.id)).all()!=ids:
-                result = 'invalidated'
-            elif row.group_name is not None and session.scalars(select(Inverter.id).where(
-                    Inverter.group==row.group_name).order_by(Inverter.id)).all()!=ids:
+            elif not self._targets_match(session,user,payload,inverters,row.group_name):
                 result = 'invalidated'
             else:
                 try:
@@ -425,7 +515,7 @@ class TelegramStore:
         now = self.clock()
         with self.sessions.begin() as session:
             expired = select(TelegramCommand.id).where(TelegramCommand.expires_at<=now,
-                                                       TelegramCommand.state=='awaiting')
+                                                       TelegramCommand.state.in_(('awaiting','input')))
             session.execute(update(CommandAudit).where(CommandAudit.request_id.in_(
                 select('tg:'+TelegramCommand.id).where(TelegramCommand.id.in_(expired))))
                 .values(result='expired'))

@@ -69,10 +69,12 @@ def tg(tmp_path):
     counter = [0]
     def link(uid=1001,user_id=1):
         return store.redeem(uid,store.issue_code(user_id))
-    def feed(text=None,data=None,uid=1001,update_id=None,chat_type='private',chat_id=None):
+    def feed(text=None,data=None,uid=1001,update_id=None,chat_type='private',chat_id=None,reply_to=None):
         counter[0] += 1
         sender = dict(id=uid,is_bot=False,first_name='Mock')
         message = dict(message_id=counter[0],date=100000,chat=dict(id=chat_id or uid,type=chat_type),from_user=sender)
+        if reply_to is not None:
+            message['reply_to_message']=dict(message_id=reply_to,date=100000,chat=message['chat'],text='prompt')
         if data is not None:
             raw = dict(callback_query=dict(id=str(counter[0]),from_user=sender,chat_instance='mock',data=data,
                 message=dict(message,text='button')))

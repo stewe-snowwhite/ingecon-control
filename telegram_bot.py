@@ -110,7 +110,8 @@ async def run_polling(store, token):
             raise ValueError('Webhook уже налаштовано; узгодьте його вимкнення перед polling.')
         await bot.set_my_commands([BotCommand(command=command,description=description) for command,description in (
             ('start','Меню та прив’язка'),('status','Поточні стани з SQLite'),('inverters','Інвертори'),
-            ('groups','Групи'),('history','Історія станів'),('control','Start/Stop із підтвердженням'),
+            ('groups','Групи'),('history','Історія станів'),('control','Керування з підтвердженням'),
+            ('cancel','Скасувати введення ліміту'),
             ('notifications','Налаштування сповіщень'),('help','Допомога'))])
         dispatcher = build_dispatcher(store)
         notifier = asyncio.create_task(notification_loop(store,bot))
