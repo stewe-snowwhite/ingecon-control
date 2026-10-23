@@ -222,8 +222,11 @@ def test_role_menu_and_two_phase_control_always_blocked(tg,modbus,role):
     with Session(tg.engine) as session,session.begin(): session.get(User,1).role=role
     tg.link()
     tg.feed('/start')
-    markup = tg.api.messages[-1].reply_markup.model_dump_json()
-    assert ('menu:control' in markup)==(role!='Viewer')
+    buttons = [button for row in tg.api.messages[-1].reply_markup.inline_keyboard for button in row]
+    expected = [('Статус','menu:status'),('Сповіщення','menu:notifications'),
+                ('Інвертори','list:i:0'),('Групи','list:g:0')]
+    if role!='Viewer':expected.append(('Керування 🔒','menu:control'))
+    assert [(button.text,button.callback_data) for button in buttons]==expected
     tg.feed(data='act:on:g:1')
     if role=='Viewer':
         assert 'Viewer' in tg.api.messages[-1].text

@@ -71,9 +71,8 @@ def keyboard(rows):
 
 
 def menu(role, controls_enabled=False):
-    rows = [[('Статус','menu:status'),('Інвертори','list:i:0')],
-            [('Групи','list:g:0'),('Історія','menu:history')],
-            [('Сповіщення','menu:notifications'),('Допомога','menu:help')]]
+    rows = [[('Статус','menu:status'),('Сповіщення','menu:notifications')],
+            [('Інвертори','list:i:0'),('Групи','list:g:0')]]
     if role in ('Administrator','Operator'):
         rows.append([('Керування' if controls_enabled else 'Керування 🔒','menu:control')])
     return keyboard(rows)
