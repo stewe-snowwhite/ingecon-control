@@ -22,6 +22,9 @@ class PowerTelegram:
         text='Загальний ліміт, кВт: '+('увімкнено' if state['enabled'] else 'вимкнено')
         if state.get('target_w') is not None:text+='\nЗадано: '+budget.kw(state['target_w'])+' кВт'
         if state.get('actual_w') is not None:text+='\nПоточна генерація: '+budget.kw(state['actual_w'])+f" кВт ({state['known']}/{state['total']})"
+        if state.get('missing_ids'):
+            text+=f"\nБез зв'язку/свіжих даних: {len(state['missing_ids'])}. Оцінка резерву: {budget.kw(state.get('offline_reserved_w',0))} кВт."
+            text+='\nСумарна генерація підтверджена лише частково.'
         text+='\n'+state['reason']+'\nРозрахунок кожні 30 с. Діє до ручного вимкнення.'
         rows=[]
         if role=='Administrator':
@@ -34,17 +37,17 @@ class PowerTelegram:
         from telegram_ui import clean,keyboard
         if payload['enabled']:
             text=(f"Підтвердьте загальний ліміт {budget.kw(payload['target_w'])} кВт.\n"
-                  f"Номінал КОЖНОГО інвертора: {budget.kw(payload['rated_w'])} кВт — перевірте його.\n"
-                  'Рівні частки з перерозподілом недовиробітку кожні 30 с, до ручного вимкнення.\n'
+                  'Регулювання за фактичною генерацією кожні 30 с, до ручного вимкнення.\n'
+                  'При втраті зв’язку залишок розподіляється між доступними з резервом для недоступних.\n'
                   'Після активації контролера виконуються реальні записи ліміту.\n')
         else:text='Підтвердьте вимкнення автоматизації. Останні ліміти залишаться; 100% автоматично не встановлюється.\n'
         text+='\n'.join(f"#{row['id']} {clean(row['name'])} · {row['ip']}:{row['port']} · Unit ID {row['device_id']}" for row in payload['targets'])
         text+='\nОдноразове підтвердження, 120 секунд. Налаштування саме по собі не підтверджує фактичну генерацію.'
         return text,keyboard([[('Підтвердити','budget:confirm:'+intent),('Скасувати','budget:cancel:'+intent)]])
 
-    def prepare(self,telegram_id,value=None,rated=100000):
+    def prepare(self,telegram_id,value=None):
         uid,_=self.identity(telegram_id)
-        intent,payload=self.service.preview(uid,value,rated,telegram_id=telegram_id)
+        intent,payload=self.service.preview(uid,value,telegram_id=telegram_id)
         return self.preview(intent,payload)
 
     async def input(self,telegram_id,bot):
@@ -52,15 +55,13 @@ class PowerTelegram:
         with self.store.sessions.begin() as session:
             uid,_=self.identity(telegram_id)
             user=self.service.actor(session,uid,telegram_id)
-            config=budget.load()
-            rated=config['rated_w'] if config and config['enabled'] else 100000
             intent,_=self.store._new_intent(session,user,telegram_id,
-                dict(action='budget_enable',targets=[],kind='budget_input',rated_w=rated,
+                dict(action='budget_enable',targets=[],kind='budget_input',
                      version=user.session_version,prompt_id=None),None,input_request=True)
             session.flush();session.get(TelegramCommand,intent).state='budget_input'
         prompt=await send(bot,telegram_id,
-            f'Введіть загальний ліміт у кВт, наприклад 400 або 400,5. Номінал кожного: {budget.kw(rated)} кВт.\n'
-            'Якщо номінал інший, використайте /power ЗАГАЛЬНІ_КВТ НОМІНАЛ_КВТ. Введення діє 5 хв; скасувати /cancel.',
+            'Введіть загальний ліміт у кВт, наприклад 400 або 400,5.\n'
+            'Номінали вводити не потрібно. Введення діє 5 хв; скасувати /cancel.',
             ForceReply(selective=True,input_field_placeholder='Загальний ліміт, кВт'))
         with self.store.sessions.begin() as session:
             self.service.actor(session,uid,telegram_id)
@@ -83,9 +84,9 @@ class PowerTelegram:
             if (not row or row.expires_at<=self.store.clock() or row.payload['version']!=user.session_version or
                 row.payload['prompt_id'] is None):raise ValueError('Запит введення застарів. Виберіть загальний ліміт заново.')
             if reply_to is not None and reply_to!=row.payload['prompt_id']:raise ValueError('Відповідь на інший запит введення.')
-            rated=row.payload['rated_w'];row.state='entered'
+            row.state='entered'
             session.execute(update(CommandAudit).where(CommandAudit.request_id=='tg:'+row.id).values(result='entered'))
-        return self.prepare(telegram_id,value,rated)
+        return self.prepare(telegram_id,value)
 
     def confirm(self,telegram_id,intent,cancel=False):
         uid,_=self.identity(telegram_id)

@@ -6,26 +6,26 @@
 {% block content %}
 <section class="surface" id="power-budget" data-status-url="{{ url_for('power_web.current') }}">
 <h1>Загальний ліміт потужності</h1>
-<p>Початково рівні частки у кВт; недовиробіток перерозподіляється між рештою. Розрахунок кожні 30 с за свіжими показниками SQLite, без додаткового опитування.</p>
+{% if config.get('POWER_FEEDBACK_AVAILABLE') %}<p>Регулювання за фактичною генерацією, без введення номіналів. Рівні частки у кВт з перерозподілом недовиробітку кожні 30 с за свіжими показниками інверторів.</p>{% else %}<p class="notice info">Для нового алгоритму потрібна активація оновлених процесів вебпанелі, бота й контролера.</p>{% endif %}
 <p id="budget-enabled">{{ 'Автоматизацію увімкнено' if budget.enabled else 'Автоматизацію вимкнено' }}</p>
 <p>Задано: <strong id="budget-target">{{ kw(budget.target_w) ~ ' кВт' if budget.get('target_w') else '—' }}</strong></p>
 <p>Поточна генерація: <strong id="budget-actual">{{ kw(budget.actual_w) ~ ' кВт' if budget.get('actual_w') is not none else '—' }}</strong> <span id="budget-coverage">({{ budget.get('known',0) }}/{{ budget.get('total',0) }} пристроїв)</span></p>
+<p id="budget-reserve">Резерв недоступних (оцінка): {{ kw(budget.get('offline_reserved_w',0)) }} кВт</p>
+<p id="budget-completeness" class="muted">{{ 'Сумарна генерація підтверджена лише частково.' if budget.get('partial') else 'Усі показники доступні.' }}</p>
 <p id="budget-reason" role="status">{{ budget.reason }}</p><p id="budget-updated">Контролер: {{ budget.get('last_cycle_at') | utc_time }} ({{ display_zone }})</p>
 <p id="budget-error" class="notice danger" hidden role="alert"></p>
-{% if g.user.role == 'Administrator' %}
+{% if g.user.role == 'Administrator' and config.get('POWER_FEEDBACK_AVAILABLE') %}
 {% if preview %}
 <h2>{{ 'Підтвердьте автоматизацію' if preview.enabled else 'Підтвердьте вимкнення автоматизації' }}</h2>
-{% if preview.enabled %}<p>Загалом <strong>{{ kw(preview.target_w) }} кВт</strong>. Підтверджений номінал кожного: {{ kw(preview.rated_w) }} кВт. Діє до ручного вимкнення. Ціль генерації може бути недосяжною за недостатнього сонця.</p>{% else %}<p>Коригування припиниться. Останні встановлені ліміти збережуться; повернення 100% потребує окремої ручної команди.</p>{% endif %}
+{% if preview.enabled %}<p>Загалом <strong>{{ kw(preview.target_w) }} кВт</strong>. Керування за виміряною генерацією, до ручного вимкнення. Недоступним пристроям залишається оцінений резерв, решта ділиться між доступними.</p>{% else %}<p>Коригування припиниться. Останні встановлені ліміти збережуться; повернення 100% потребує окремої ручної команди.</p>{% endif %}
 <ul>{% for target in preview.targets %}<li>#{{ target.id }} {{ target.name }} · {{ target.ip }}:{{ target.port }} · Unit ID {{ target.device_id }}</li>{% endfor %}</ul>
 <form method="POST" action="{{ url_for('power_web.confirm') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="intent" value="{{ intent }}"><button type="submit" name="decision" value="confirm" class="button primary">Підтвердити</button> <button type="submit" name="decision" value="cancel" class="button">Скасувати</button></form>
 <p>Одноразове підтвердження діє 120 секунд. Активований контролер виконує реальні команди ліміту. Увімкнення/вимкнення інверторів автоматично не виконується.</p>
 {% else %}
 <form method="POST" action="{{ url_for('power_web.preview') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="enable">
 <label>Загальний ліміт, кВт<input type="number" name="target_kw" min="0.001" max="100000" step="0.001" required value="{{ kw(budget.target_w).replace(',','.') if budget.get('target_w') else '400' }}"></label>
-<label>Номінал кожного інвертора, кВт<input type="number" name="rated_kw" min="1" max="1000" step="0.001" required value="{{ kw(budget.rated_w).replace(',','.') if budget.get('rated_w') else '100' }}"></label>
-<label><input type="checkbox" name="acknowledge_nominal" value="yes" required>Підтверджую однаковий номінал усіх інверторів за їхніми налаштуваннями та напругою AC.</label>
 <button type="submit" class="button primary">Переглянути розподіл і підтвердити</button></form>
 {% if budget.enabled %}<form method="POST" action="{{ url_for('power_web.preview') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="button" name="action" value="disable">Вимкнути автоматизацію</button></form>{% endif %}
 {% endif %}{% endif %}
-<p class="muted">Цілий крок 1% номіналу, округлення вниз. Недоступним пристроям резервується 100% номіналу: відсутність зв'язку не означає нульову генерацію. Підвищення можливе лише після підтверджених знижень. За невідомого результату повторення немає. Поки режим увімкнено, ручні ліміти й Start заблоковані, Stop доступний.</p>
+<p class="muted">Команди 1–100%; відсоток не є часткою миттєвої генерації. Контролер перевіряє FC04 та наступні виміри перед підвищенням. При втраті зв'язку збережена оцінка резерву не обнуляється; якщо попередніх даних немає, підвищення призупиняються. Це регулювання з інтервалом 30 с, без гарантії відсутності коротких перевищень. Ручні ліміти й Start під час автоматизації заблоковані, Stop доступний.</p>
 </section>{% endblock %}

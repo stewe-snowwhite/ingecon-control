@@ -13,6 +13,9 @@
       el('budget-target').textContent = power(data.target_w);
       el('budget-actual').textContent = power(data.actual_w);
       el('budget-coverage').textContent = '(' + (data.known || 0) + '/' + (data.total || 0) + ' пристроїв)';
+      if (el('budget-reserve')) el('budget-reserve').textContent = 'Резерв недоступних (оцінка): ' + power(data.offline_reserved_w ?? 0);
+      if (el('budget-completeness')) el('budget-completeness').textContent =
+        (data.partial ?? (data.known < data.total)) ? 'Сумарна генерація підтверджена лише частково.' : 'Усі показники доступні.';
       el('budget-reason').textContent = data.reason;
       el('budget-updated').textContent = data.last_cycle_at != null ? 'Контролер: ' + new Date(data.last_cycle_at * 1000).toLocaleString('uk-UA', {timeZone: 'Europe/Kyiv'}) + ' (Київ)' : 'Очікування контролера';
       el('budget-error').hidden = true;

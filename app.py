@@ -82,6 +82,7 @@ def create_app(config=None):
     app.register_blueprint(monitor_web)
     app.register_blueprint(power_web)
     app.config['POWER_BUDGET_AVAILABLE'] = True
+    app.config['POWER_FEEDBACK_AVAILABLE'] = True
     app.config['MONITOR_POLLING_AVAILABLE'] = True
     app.config['DISCOVERY_AVAILABLE'] = True
     app.config['MODBUS_TOOLS_AVAILABLE'] = True

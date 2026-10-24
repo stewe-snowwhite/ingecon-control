@@ -34,10 +34,8 @@ def preview():
     action=field('action')
     if action not in ('enable','disable'):abort(400,'Невідома дія автоматизації.')
     try:
-        if action=='enable' and field('acknowledge_nominal')!='yes':raise ValueError('Підтвердьте номінальну потужність кожного інвертора.')
         service=BudgetService(db.engine)
-        intent,payload=service.preview(g.user.id,watts(field('target_kw')) if action=='enable' else None,
-                                      watts(field('rated_kw')) if action=='enable' else 100000)
+        intent,payload=service.preview(g.user.id,watts(field('target_kw')) if action=='enable' else None)
         return render_template('power_budget.html',budget=status(),preview=payload,intent=intent,kw=kw)
     except ValueError as error:abort(400,str(error))
     except (OSError,OperationBusy):abort(503,'Контролер зайнятий. Налаштування не підтверджено.')

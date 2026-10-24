@@ -281,7 +281,8 @@ def build_dispatcher(store):
                 store.cancel_limit_input(telegram_id)
                 if command=='poweroff':text,markup=power.prepare(telegram_id)
                 elif len(pieces)>1:
-                    text,markup=power.prepare(telegram_id,watts(pieces[1]),watts(pieces[2]) if len(pieces)>2 else 100000)
+                    if len(pieces)!=2:raise ValueError('Формат: /power ЗАГАЛЬНІ_КВТ. Номінал не потрібний.')
+                    text,markup=power.prepare(telegram_id,watts(pieces[1]))
                 else:text,markup=power.screen(telegram_id)
                 await send(bot,telegram_id,text,markup)
                 return

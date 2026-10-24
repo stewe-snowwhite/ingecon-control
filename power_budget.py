@@ -4,7 +4,6 @@ from contextvars import ContextVar
 from decimal import Decimal
 import hashlib
 import json
-import math
 import os
 from pathlib import Path
 import re
@@ -21,6 +20,7 @@ from modbus_config import load_configuration
 from models import CommandAudit, Inverter, MonitorConfig, TelegramCommand, User
 from monitoring import target_for
 from operation_locks import resource_lock
+from power_feedback import ALGORITHM, allocation, fresh, number, remember
 
 INTERVAL = 30
 _LOCKED = ContextVar('power_budget_locked',default=False)
@@ -67,16 +67,19 @@ def load():
                 if key in result:raise ValueError('Повторне поле загального ліміту.')
                 result[key]=value
             return result
-        data=json.loads(stream.read(262145),object_pairs_hook=unique)
-    if not isinstance(data,dict) or data.get('version')!=1 or type(data.get('enabled')) is not bool:
+        def invalid_constant(value):raise ValueError('Нечислове значення у конфігурації.')
+        data=json.loads(stream.read(262145),object_pairs_hook=unique,parse_constant=invalid_constant)
+    if (not isinstance(data,dict) or type(data.get('version')) is not int or
+        data.get('version') not in (1,2) or type(data.get('enabled')) is not bool):
         raise ValueError('Некоректна конфігурація загального ліміту.')
     if not isinstance(data.get('revision'),str) or not isinstance(data.get('state'),dict):
         raise ValueError('Некоректний стан загального ліміту.')
     if data['enabled']:
-        if (type(data.get('target_w')) is not int or type(data.get('rated_w')) is not int or
-            not 1<=data['target_w']<=100_000_000 or not 1000<=data['rated_w']<=1_000_000 or
+        if (type(data.get('target_w')) is not int or not 1<=data['target_w']<=100_000_000 or
             not isinstance(data.get('targets'),list) or not 1<=len(data['targets'])<=100):
             raise ValueError('Некоректні параметри загального ліміту.')
+    if data['version']==2 and data.get('algorithm')!=ALGORITHM:
+        raise ValueError('Невідомий алгоритм регулювання.')
     return data
 
 
@@ -140,75 +143,24 @@ def automatic_command(revision,inverter_id):
     finally:_AUTOMATIC.reset(token)
 
 
-def allocation(target_w,rated_w,rows,previous_estimates=None):
-    """Equal water filling; cap weak units; reserve unreachable units at full rating.
-
-    Floors whole-percent commands so the sum of assigned ceilings never exceeds
-    the budget. This is generation control, not an instantaneous export relay.
-    """
-    if (type(target_w) is not int or type(rated_w) is not int or not 1000<=rated_w<=1_000_000 or
-        not 1<=len(rows)<=100 or not 1<=target_w<=len(rows)*rated_w or
-        len({row['id'] for row in rows})!=len(rows)):raise ValueError('Некоректний бюджет або список інверторів.')
-    estimates={};ceilings={};available=[];reserve=0
-    previous_estimates=previous_estimates or {}
-    share=target_w/max(1,len(rows));step=rated_w/100
-    for row in rows:
-        ident=str(row['id']);cap=row.get('effective_percent',row.get('power_limit_percent'))
-        usable=(not row.get('stale',True) and row.get('state')=='Online' and
-                row.get('checks',{}).get('modbus',{}).get('ok') is True and
-                type(row.get('active_power_w')) in (int,float) and math.isfinite(row['active_power_w']) and
-                type(cap) in (int,float) and math.isfinite(cap) and 0<=cap<=100)
-        if not usable:
-            # A lost unit may still generate. Never redistribute its budget as zero.
-            ceiling=100
-            reserve+=rated_w;ceilings[ident]=ceiling
-            continue
-        power=max(0,row['active_power_w'])
-        if power>rated_w*1.05:raise ValueError('Показники перевищують підтверджений номінал; перевірте номінальну потужність.')
-        old=previous_estimates.get(ident,rated_w)
-        if power >= cap*step-max(100,step*.2):
-            demand=min(rated_w,max(power+step,old+step)) if old<share else rated_w
-        else:demand=min(rated_w,max(step,power+step))
-        estimates[ident]=demand
-        available.append((ident,demand))
-    budget=target_w-reserve
-    if budget+1e-6<len(available)*step or not available:
-        raise ValueError('Недостатній бюджет з урахуванням недоступних інверторів. Їхня потужність не вважається нульовою.')
-    remaining=float(budget);pool=available[:];assigned={}
-    while pool:
-        equal=remaining/len(pool)
-        small=[(ident,demand) for ident,demand in pool if demand<=equal]
-        if not small:
-            assigned.update((ident,equal) for ident,_ in pool);break
-        for ident,demand in small:
-            assigned[ident]=demand;remaining-=demand
-        small_ids={ident for ident,_ in small}
-        pool=[item for item in pool if item[0] not in small_ids]
-    for ident,value in assigned.items():ceilings[ident]=min(100,max(1,math.floor(value*100/rated_w+1e-9)))
-    # Largest remainder: equal units differ by at most one percentage point.
-    units=target_w*100//rated_w-sum(ceilings.values())
-    order=sorted(assigned,key=lambda ident:(-(assigned[ident]*100/rated_w-math.floor(assigned[ident]*100/rated_w)),int(ident)))
-    for ident in order:
-        if units and ceilings[ident]<min(100,math.ceil(assigned[ident]*100/rated_w-1e-9)):
-            ceilings[ident]+=1;units-=1
-    if sum(ceilings.values())*rated_w>target_w*100:raise ValueError('Ліміт нижчий за доступний крок керування.')
-    return dict(percent=ceilings,estimates=estimates,reserved_w=reserve,available_ids=[ident for ident,_ in available])
-
-
 def status(now=None):
     now=time.time() if now is None else now
     config=load()
     if not config:return dict(enabled=False,phase='disabled',reason='Автоматизацію вимкнено.')
     state=config['state']
-    result=dict(enabled=config['enabled'],target_w=config.get('target_w'),rated_w=config.get('rated_w'),
+    result=dict(enabled=config['enabled'],target_w=config.get('target_w'),algorithm=config.get('algorithm'),
         phase=state.get('phase','waiting'),reason=state.get('reason','Очікування контролера.'),
         last_cycle_at=state.get('last_cycle_at'),actual_w=state.get('actual_w'),
         known=state.get('known',0),total=len(config.get('targets',[])),
-        armed=state.get('armed',False),percent=state.get('desired',{}),revision=config['revision'])
+        armed=state.get('armed',False),percent=state.get('desired',{}),revision=config['revision'],
+        reserved_w=state.get('reserved_w',0),offline_reserved_w=state.get('offline_reserved_w',0),
+        missing_ids=state.get('missing_ids',[]),unknown_ids=state.get('unknown_ids',[]),
+        estimated_total_w=state.get('estimated_total_w'),partial=state.get('known',0)<len(config.get('targets',[])))
     stamp=state.get('last_cycle_at')
     result['controller_alive']=type(stamp) in (float,int) and 0<=now-stamp<=INTERVAL*3
     if config['enabled'] and not result['controller_alive']:
-        result.update(phase='stale',reason='Немає актуального heartbeat контролера. Фактичний загальний ліміт не підтверджено.')
+        result.update(phase='stale',actual_w=None,known=0,partial=True,
+            reason='Немає актуального heartbeat контролера. Фактичний загальний ліміт не підтверджено.')
     return result
 
 
@@ -224,7 +176,7 @@ class BudgetService:
         if not user or not user.active or user.role!='Administrator':raise ValueError('Автоматизація доступна лише Administrator.')
         return user
 
-    def preview(self,user_id,target_w=None,rated_w=100000,*,telegram_id=0):
+    def preview(self,user_id,target_w=None,*,telegram_id=0):
         with command_lock(),Session(self.engine) as session,session.begin():
             user=self.actor(session,user_id,telegram_id);old=load()
             if old and old['enabled'] and old['database']!=database_key(self.engine):raise ValueError('Інша база автоматизації.')
@@ -235,14 +187,13 @@ class BudgetService:
                     raise ValueError('Для автоматизації встановіть інтервал опитування не довший за 30 секунд.')
                 if not inverter_controls.enabled():raise ValueError('Чинний дозвіл фізичного керування вимкнено.')
                 targets=inventory(session)
-                if type(rated_w) is not int or not 1000<=rated_w<=1_000_000:raise ValueError('Номінал одного інвертора: 1–1000 кВт.')
-                if type(target_w) is not int or not len(targets)*rated_w/100<=target_w<=len(targets)*rated_w:
-                    raise ValueError('Загальний ліміт має бути від 1% до 100% сумарного підтвердженого номіналу.')
+                if type(target_w) is not int or not 1<=target_w<=100_000_000:
+                    raise ValueError('Загальний ліміт: понад 0 і до 100000 кВт.')
             else:
                 if not old or not old['enabled']:raise ValueError('Автоматизацію вже вимкнено.')
                 targets=old['targets']
-            payload=dict(version=1,revision=secrets.token_hex(16),enabled=active,target_w=target_w,
-                rated_w=rated_w,owner_id=user.id,owner_key=owner_key(user),database=database_key(self.engine),
+            payload=dict(version=2,algorithm=ALGORITHM,revision=secrets.token_hex(16),enabled=active,target_w=target_w,
+                owner_id=user.id,owner_key=owner_key(user),database=database_key(self.engine),
                 authorization=inverter_controls.fingerprint(),modbus=load_configuration().fingerprint,
                 targets=targets,state={},created_at=self.clock())
             intent=secrets.token_hex(12)
@@ -269,7 +220,8 @@ class BudgetService:
                 if (not row or row.user_id!=user.id or row.telegram_id!=telegram_id or row.state!='awaiting' or
                     row.payload.get('kind')!='power_budget'):raise ValueError('Підтвердження вже використано або недійсне.')
                 payload=row.payload['config'];old=load()
-                valid=(row.expires_at>self.clock() and row.payload['user_version']==user.session_version and
+                valid=(payload.get('version')==2 and payload.get('algorithm')==ALGORITHM and
+                       row.expires_at>self.clock() and row.payload['user_version']==user.session_version and
                        row.payload['base']==(old['revision'] if old else None))
                 if valid and payload['enabled']:
                     valid=(payload['targets']==inventory(session) and payload['authorization']==inverter_controls.fingerprint() and
@@ -278,7 +230,12 @@ class BudgetService:
                 session.execute(update(CommandAudit).where(CommandAudit.request_id=='budget:'+intent).values(result=row.state))
                 if cancel or not valid:return row.state
             # Claim is committed before the atomic file change. No inverter I/O.
-            payload['state']=dict(phase='waiting' if payload['enabled'] else 'disabled',
+            old_keys={str(t['id']):t['key'] for t in old['targets']} if old else {}
+            retained={str(t['id']) for t in payload['targets'] if old_keys.get(str(t['id']))==t['key']}
+            history={key:value for key,value in old['state'].get('history',{}).items() if key in retained} if old else {}
+            payload['state']=dict(history=history,not_before=self.clock(),
+                                  prior_pending=old['state'].get('pending',[]) if old else [],
+                                  phase='waiting' if payload['enabled'] else 'disabled',
                                   reason='Очікування контролера.' if payload['enabled'] else 'Вимкнено вручну; останні ліміти збережено.')
             save(payload)
             with Session(self.engine) as session,session.begin():

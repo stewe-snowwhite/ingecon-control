@@ -52,16 +52,19 @@ def test_numeric_input_confirmation_persistence_and_disable(ready):
     assert budget.load()['enabled'] is False and clients==[]
 
 
-def test_custom_nominal_and_cancel_preview(ready):
+def test_kw_only_no_nominal_and_cancel_preview(ready):
     tg,clients=ready
     tg.feed('/power 150 110')
+    assert 'Номінал не потрібний' in tg.api.messages[-1].text
+    assert not budget.load() and clients==[]
+    tg.feed('/power 150')
     preview=tg.api.messages[-1]
-    assert '110 кВт' in preview.text
+    assert '150 кВт' in preview.text and 'Номінал КОЖНОГО' not in preview.text
     tg.feed(data=buttons(preview)[1].callback_data)
     assert 'Скасовано' in tg.api.messages[-1].text and not budget.load() and clients==[]
 
 
-@pytest.mark.parametrize('text',['0','-1','NaN','1e3','400'])
+@pytest.mark.parametrize('text',['0','-1','NaN','1e3','100001'])
 def test_invalid_value_never_configures_or_writes(ready,text):
     tg,clients=ready
     tg.feed(data='budget:input')

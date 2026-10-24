@@ -21,37 +21,27 @@ def row(ident,power=50000,cap=100,online=True):
                 state='Online' if online else 'Offline',checks={'modbus':{'ok':online}})
 
 
-def test_equal_400kw_on_twenty_100kw_units():
-    plan=budget.allocation(400000,100000,[row(n) for n in range(1,21)])
-    assert plan['percent']=={str(n):20 for n in range(1,21)}
+def test_equal_feedback_reduces_bounded_steps_without_nominal():
+    plan=budget.allocation(400000,[row(n) for n in range(1,21)])
+    assert plan['percent']=={str(n):80 for n in range(1,21)}
+    assert plan['actual_w']==1000000 and plan['reserved_w']==0
 
 
-def test_weak_units_release_capacity_but_sum_of_ceilings_stays_within_budget():
+def test_weak_unit_at_maximum_releases_its_unused_kw_share():
     rows=[row(1,power=10000)]+[row(n) for n in range(2,21)]
-    plan=budget.allocation(400000,100000,rows)
-    assert plan['percent']['1']==11
-    assert sum(plan['percent'].values())==400
-    assert set(plan['percent'][str(n)] for n in range(2,21))=={20,21}
+    plan=budget.allocation(400000,rows)
+    assert plan['percent']['1']==100
+    assert plan['assigned_w']['1']==10000
+    assert plan['assigned_w']['2']>400000/20
 
 
-def test_largest_remainder_approaches_target_without_exceeding_it():
-    plan=budget.allocation(400500,100000,[row(n) for n in range(1,24)])
-    assert sum(plan['percent'].values())==400
-    assert max(plan['percent'].values())-min(plan['percent'].values())==1
-
-
-def test_offline_unit_reserves_full_nominal_not_zero_or_old_percent():
-    plan=budget.allocation(400000,100000,[row(1,cap=20,online=False)]+[row(n) for n in range(2,21)])
-    assert plan['reserved_w']==100000 and plan['percent']['1']==100
-    assert sum(plan['percent'].values())<=400
-    with pytest.raises(ValueError):budget.allocation(50000,100000,[row(1,online=False),row(2)])
-
-
-def test_low_sun_does_not_invent_generation_and_recovery_is_gradual():
-    plan=budget.allocation(400000,100000,[row(n,power=0,cap=20) for n in range(1,21)])
-    assert set(plan['percent'].values())=={1}
-    recovery=budget.allocation(400000,100000,[row(n,power=1000,cap=1) for n in range(1,21)],plan['estimates'])
-    assert set(recovery['percent'].values())=={2}
+def test_missing_without_history_blocks_increases_not_reductions():
+    rows=[row(1,online=False),row(2,power=50000,cap=50)]
+    plan=budget.allocation(200000,rows)
+    assert plan['unknown_ids']==['1'] and plan['percent']['2']==50
+    assert '1' not in plan['percent'] and plan['estimated_total_w'] is None
+    plan=budget.allocation(10000,rows)
+    assert plan['percent']['2']<50
 
 
 @pytest.mark.parametrize('text,value',[('400',400000),('400,5',400500),('400.125',400125),(' 1 ',1000)])
@@ -85,6 +75,7 @@ def fleet(web,authorized,request):
         intent,_=service.preview(1,target)
         assert service.confirm(1,intent)=='configured'
         assert authorized==[]
+        observe()  # Commands require telemetry newer than the confirmation.
     def observe(overrides=None):
         overrides=overrides or {}
         clock[0]+=30
@@ -95,7 +86,8 @@ def fleet(web,authorized,request):
                 status.checked_at=clock[0]
                 if status.inverter_id in pending:
                     status.power_limit_percent=pending[status.inverter_id]
-                    status.active_power_w=min(status.active_power_w,pending[status.inverter_id]*1000)
+                    if status.active_power_w is not None:
+                        status.active_power_w=min(status.active_power_w,pending[status.inverter_id]*1000)
                 for key,value in overrides.get(status.inverter_id,{}).items():setattr(status,key,value)
         db.session.expire_all()
     return SimpleNamespace(module=module,client=client,clock=clock,engine=engine,service=service,
@@ -113,11 +105,11 @@ def test_actual_fleet_shape_26_units_across_8_9_9_groups(fleet):
     worker=fleet.worker(True)
     assert worker.run_cycle()=='awaiting_readback'
     plan=budget.load()['state']['desired']
-    assert len(plan)==26 and Counter(plan.values())=={16:10,15:16} and sum(plan.values())==400
+    assert len(plan)==26 and set(plan.values())=={80}
     assert len(fleet.clients)==26
     assert all(client.calls[1][-1]==1 for client in fleet.clients)
     fleet.observe()
-    assert worker.run_cycle()=='active' and len(fleet.clients)==26
+    assert worker.run_cycle()=='awaiting_readback' and len(fleet.clients)>26
 
 
 def test_default_worker_and_preview_never_send_commands(fleet):
@@ -125,7 +117,7 @@ def test_default_worker_and_preview_never_send_commands(fleet):
     assert not budget.load() and fleet.clients==[]
     assert fleet.service.confirm(1,intent)=='configured'
     assert fleet.worker().run_cycle()=='dry_run'
-    assert budget.load()['state']['desired']=={str(n):20 for n in range(1,21)}
+    assert budget.load()['state']['desired']=={str(n):80 for n in range(1,21)}
     assert fleet.clients==[]
 
 
@@ -137,32 +129,28 @@ def test_missing_power_reserves_budget_without_raising_that_inverters_limit(flee
     fleet.worker(True).run_cycle()
     assert len(fleet.clients)==19
     assert all(client.host!='192.0.2.1' for client in fleet.clients)
-    assert budget.load()['state']['reserved_w']==100000
+    assert budget.load()['state']['unknown_ids']==['1']
 
 
 def test_reductions_readback_and_deduplication(fleet):
     fleet.enable();worker=fleet.worker(True)
     assert worker.run_cycle()=='awaiting_readback' and len(fleet.clients)==20
-    assert all(client.calls==[('connect',),('write_multiple',1000,[3,6553],number)]
+    assert all(client.calls==[('connect',),('write_multiple',1000,[3,80*32767//100],number)]
                for number,client in enumerate(fleet.clients,1))
     worker.run_cycle();assert len(fleet.clients)==20
-    fleet.observe();assert worker.run_cycle()=='active' and len(fleet.clients)==20
-    fleet.observe();worker.run_cycle();assert len(fleet.clients)==20
+    fleet.observe();assert worker.run_cycle()=='awaiting_readback' and len(fleet.clients)==40
     with Session(fleet.engine) as session:
-        assert len(session.scalars(select(CommandAudit).where(CommandAudit.source=='automation')).all())==20
+        assert len(session.scalars(select(CommandAudit).where(CommandAudit.source=='automation')).all())==40
 
 
-def test_reduce_weak_unit_then_raise_others_only_after_readback(fleet):
-    fleet.enable();worker=fleet.worker(True);worker.run_cycle();fleet.observe();worker.run_cycle()
-    fleet.clients.clear()
-    fleet.observe(**{})
-    with Session(fleet.engine) as session,session.begin():session.get(InverterStatus,1).active_power_w=10000
-    assert worker.run_cycle()=='awaiting_readback'
-    assert len(fleet.clients)==1 and fleet.clients[0].calls[1][2]==[3,11*32767//100]
-    worker.run_cycle();assert len(fleet.clients)==1
+def test_cloud_redistribution_reduces_before_increasing(fleet):
+    fleet.enable();worker=fleet.worker(True)
+    worker.run_cycle()
+    assert len(fleet.clients)==20
+    worker.run_cycle();assert len(fleet.clients)==20
+    # No second command without a post-write FC04 and a new measurement.
     fleet.observe();worker.run_cycle()
-    assert len(fleet.clients)>1
-    assert all(client.calls[1][2][1]<=21*32767//100 for client in fleet.clients[1:])
+    assert len(fleet.clients)==40
 
 
 @pytest.mark.parametrize('change',['monitor','stale','model','owner','role','authorization'])
@@ -186,7 +174,7 @@ def test_restart_waits_for_inflight_readback_and_does_not_replay(fleet):
     assert len(fleet.clients)==20
     restarted=fleet.worker(True)
     restarted.run_cycle();assert len(fleet.clients)==20
-    fleet.observe();assert restarted.run_cycle()=='active' and len(fleet.clients)==20
+    fleet.observe();assert restarted.run_cycle()=='awaiting_readback' and len(fleet.clients)==40
     assert budget.status(now=fleet.clock[0]+91)['phase']=='stale'
 
 
@@ -221,8 +209,12 @@ def test_unknown_result_and_mismatched_readback_require_manual_reconfirmation(fl
     assert len(calls)==1
     worker.run_cycle();assert len(calls)==1
     fleet.observe({1:{'power_limit_percent':100}})
-    assert worker.run_cycle()=='paused'
-    fleet.observe();worker.run_cycle();assert len(calls)==1
+    assert worker.run_cycle()=='awaiting_readback'
+    assert budget.load()['state']['faults'].get('1')
+    assert '1' not in budget.load()['state']['desired']
+    # Faulted unit stays blocked; other units may continue regulating.
+    first_calls=len(calls)
+    worker.run_cycle();assert len(calls)==first_calls
 
 
 def test_manual_limits_blocked_until_explicit_disable_and_stop_remains_available(fleet):
@@ -283,8 +275,10 @@ def test_website_auth_csrf_confirmation_and_status(fleet):
     client=fleet.client
     assert client.get('/power-budget').status_code==200
     assert client.post('/power-budget/preview',data={'action':'enable','target_kw':'400'}).status_code==400
-    response=post(client,'/power-budget/preview',dict(action='enable',target_kw='400',rated_kw='100',acknowledge_nominal='yes'))
+    response=post(client,'/power-budget/preview',dict(action='enable',target_kw='400'))
     assert response.status_code==200 and '400 кВт' in response.text and '#20 Mock 20' in response.text
+    assert 'name="rated_kw"' not in client.get('/power-budget').text
+    assert 'name="acknowledge_nominal"' not in client.get('/power-budget').text
     import re
     intent=re.search('name="intent" value="([^"]+)"',response.text).group(1)
     assert not budget.load() and fleet.clients==[]
@@ -308,3 +302,112 @@ def test_long_polling_interval_is_rejected_while_automation_is_active(fleet):
     fleet.enable()
     assert post(fleet.client,'/monitor/polling',dict(intent='temporary',interval_seconds='60')).status_code==400
     assert post(fleet.client,'/monitor/polling',dict(intent='temporary',interval_seconds='1')).status_code==302
+
+
+def test_offline_pending_unit_does_not_block_redistribution_to_remaining_units(fleet):
+    fleet.enable();worker=fleet.worker(True)
+    assert worker.run_cycle()=='awaiting_readback'
+    fleet.observe({1:dict(state='Offline',modbus_ok=False,active_power_w=None),
+                   **{n:dict(active_power_w=10000) for n in range(2,21)}})
+    fleet.clients.clear()
+    assert worker.run_cycle()=='awaiting_readback'
+    state=budget.load()['state']
+    assert state['offline_reserved_w']==60000 and state['known']==19
+    assert any(attempt['id']=='1' for attempt in state['pending'])
+    assert len(fleet.clients)==19 and all(c.host!='192.0.2.1' for c in fleet.clients)
+    assert all(c.calls[1][2]==[3,82*32767//100] for c in fleet.clients)
+    assert budget.status(now=fleet.clock[0])['partial']
+    # Communication recovery needs a fresh post-write FC04 before rejoining.
+    fleet.clients.clear()
+    fleet.observe({1:dict(state='Online',modbus_ok=True,active_power_w=50000)})
+    worker.run_cycle()
+    assert budget.load()['state']['missing_ids']==[]
+    assert any(c.host=='192.0.2.1' for c in fleet.clients)
+
+
+def test_never_seen_offline_unit_blocks_increases_but_not_whole_controller(fleet):
+    fleet.enable()
+    with Session(fleet.engine) as session,session.begin():
+        for row in session.scalars(select(InverterStatus)):
+            row.power_limit_percent=20;row.active_power_w=10000
+        lost=session.get(InverterStatus,1)
+        lost.active_power_w=None;lost.modbus_ok=False;lost.state='Offline'
+    assert fleet.worker(True).run_cycle()=='partial'
+    assert fleet.clients==[] and budget.load()['state']['unknown_ids']==['1']
+
+
+def test_legacy_policy_upgrade_preserves_goal_actor_targets_and_pending(fleet):
+    fleet.enable(900000)
+    old=budget.load();old.update(version=1,rated_w=100000);old.pop('algorithm')
+    old['state']['pending']=[dict(id='1',percent=80,at=fleet.clock[0]+1)]
+    budget.save(old)
+    worker=fleet.worker(True)
+    worker.run_cycle()
+    new=budget.load()
+    assert new['version']==2 and new['algorithm']==budget.ALGORITHM and 'rated_w' not in new
+    for key in ('target_w','owner_id','owner_key','targets','authorization','modbus','database','revision'):
+        assert new[key]==old[key]
+    assert new['state']['pending']==old['state']['pending'] and fleet.clients==[]
+    worker.run_cycle()
+    with Session(fleet.engine) as session:
+        upgrades=session.scalars(select(CommandAudit).where(CommandAudit.action=='budget_algorithm_upgrade')).all()
+        assert len(upgrades)==1
+
+
+def test_measurements_older_than_confirmation_cannot_trigger_first_write(fleet):
+    intent,_=fleet.service.preview(1,400000)
+    fleet.service.confirm(1,intent)
+    assert fleet.worker(True).run_cycle()=='waiting' and fleet.clients==[]
+    fleet.observe()
+    assert fleet.worker(True).run_cycle()=='awaiting_readback'
+
+
+def test_old_nominal_based_confirmation_is_invalidated(fleet):
+    from models import TelegramCommand
+    intent,_=fleet.service.preview(1,400000)
+    with Session(fleet.engine) as session,session.begin():
+        pending=session.get(TelegramCommand,intent)
+        payload=dict(pending.payload);config=dict(payload['config'])
+        config.update(version=1,rated_w=100000);config.pop('algorithm')
+        pending.payload=dict(payload,config=config)
+    assert fleet.service.confirm(1,intent)=='invalidated'
+    assert not budget.load() and fleet.clients==[]
+
+
+def test_new_endpoint_does_not_inherit_old_inverters_observed_reserve(fleet):
+    fleet.enable();fleet.worker().run_cycle()
+    assert '1' in budget.load()['state']['history']
+    with Session(fleet.engine) as session,session.begin():session.get(Inverter,1).ip_address='192.0.2.111'
+    intent,_=fleet.service.preview(1,500000)
+    assert fleet.service.confirm(1,intent)=='configured'
+    assert '1' not in budget.load()['state']['history']
+
+
+def test_telemetry_expiring_mid_batch_stops_further_writes(fleet,monkeypatch):
+    import power_controller
+    execute=power_controller.execute_devices
+    def delayed(*args,**kwargs):
+        result=execute(*args,**kwargs)
+        fleet.clock[0]+=61
+        return result
+    monkeypatch.setattr(power_controller,'execute_devices',delayed)
+    fleet.enable()
+    assert fleet.worker(True).run_cycle()=='waiting'
+    assert len(fleet.clients)==1 and len(budget.load()['state']['pending'])==1
+    assert budget.load()['state']['actual_w'] is None
+
+
+def test_unit_lost_mid_batch_is_skipped_while_rest_continue(fleet,monkeypatch):
+    import power_controller
+    execute=power_controller.execute_devices
+    def lose_next(user,action,inverters,value,**kwargs):
+        result=execute(user,action,inverters,value,**kwargs)
+        if inverters[0].id==1:
+            with Session(fleet.engine) as session,session.begin():
+                session.get(InverterStatus,2).modbus_ok=False
+        return result
+    monkeypatch.setattr(power_controller,'execute_devices',lose_next)
+    fleet.enable()
+    fleet.worker(True).run_cycle()
+    assert len(fleet.clients)==19 and all(client.host!='192.0.2.2' for client in fleet.clients)
+    assert all(attempt['id']!='2' for attempt in budget.load()['state']['pending'])
