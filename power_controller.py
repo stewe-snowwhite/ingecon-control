@@ -132,9 +132,15 @@ class PowerController:
                         details=[dict(outcome='unknown',message='Результат невідомий; повторення немає.',id=inv.id,name=inv.name)]
                     attempt['at']=self.clock()  # Accept only FC04 newer than completion, not request start.
                     result=details[0]['outcome']
+                    deferred=(result=='unconfirmed' and details[0].get('message')==inverter_controls.BUSY_MESSAGE)
                     with Session(self.engine) as session,session.begin():
                         session.execute(update(CommandAudit).where(CommandAudit.request_id==request_id)
-                                        .values(result=result,details=details,occurred_at=self.clock()))
+                                        .values(result='deferred' if deferred else result,details=details,occurred_at=self.clock()))
+                    if deferred:
+                        # Endpoint lock was not acquired: no request was sent.
+                        # Fresh telemetry may schedule a NEW attempt next cycle.
+                        state['pending'].remove(attempt)
+                        return finish('deferred','Пристрій опитує монітор. Запис не виконувався; очікування нового циклу даних.')
                     if result!='register_confirmed':
                         return finish('awaiting_readback','Результат запису не підтверджено. Повторення немає; очікується FC04.')
                 return finish('awaiting_readback','Записи прийнято; очікування нового FC04 перед наступними змінами.')

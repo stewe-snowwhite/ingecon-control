@@ -64,13 +64,15 @@ def test_invalid_kw(text):
 
 
 @pytest.fixture
-def fleet(web,authorized):
+def fleet(web,authorized,request):
     module,client=web
     clock=[10000.0]
-    for number in range(1,21):
-        inv=Inverter(id=number,name=f'Mock {number}',group='A',model='ingecon_sun_100tl',ip_address=f'192.0.2.{number}')
+    count=getattr(request,'param',20)
+    for number in range(1,count+1):
+        group=('КТП 1' if number<=8 else 'КТП 2' if number<=17 else 'КТП 3') if count==26 else 'A'
+        inv=Inverter(id=number,name=f'Mock {number}',group=group,model='ingecon_sun_100tl',ip_address=f'192.0.2.{number}')
         db.session.add(inv);db.session.flush()
-        config=MonitorConfig(inverter_id=number,port=502,device_id=number)
+        config=MonitorConfig(inverter_id=number,port=502,device_id=1 if count==26 else number)
         db.session.add(config);db.session.flush()
         db.session.add(InverterStatus(inverter_id=number,target_key=target_for(inv,config).key,
             state='Online',checked_at=clock[0],last_success_at=clock[0],tcp_ok=True,modbus_ok=True,
@@ -99,6 +101,23 @@ def fleet(web,authorized):
     return SimpleNamespace(module=module,client=client,clock=clock,engine=engine,service=service,
         clients=authorized,enable=enable,observe=observe,
         worker=lambda armed=False:PowerController(engine,enable_writes=armed,clock=lambda:clock[0]))
+
+
+@pytest.mark.parametrize('fleet',[26],indirect=True)
+def test_actual_fleet_shape_26_units_across_8_9_9_groups(fleet):
+    from collections import Counter
+    fleet.enable()
+    config=budget.load()
+    assert len(config['targets'])==26
+    assert Counter(t['group'] for t in config['targets'])=={'КТП 1':8,'КТП 2':9,'КТП 3':9}
+    worker=fleet.worker(True)
+    assert worker.run_cycle()=='awaiting_readback'
+    plan=budget.load()['state']['desired']
+    assert len(plan)==26 and Counter(plan.values())=={16:10,15:16} and sum(plan.values())==400
+    assert len(fleet.clients)==26
+    assert all(client.calls[1][-1]==1 for client in fleet.clients)
+    fleet.observe()
+    assert worker.run_cycle()=='active' and len(fleet.clients)==26
 
 
 def test_default_worker_and_preview_never_send_commands(fleet):
@@ -219,6 +238,20 @@ def test_manual_limits_blocked_until_explicit_disable_and_stop_remains_available
     assert len(fleet.clients)==1
     execute_devices(user,'limit',[inv],37,writes_enabled=True)
     assert len(fleet.clients)==2
+
+
+def test_monitor_endpoint_contention_defers_unsent_command_without_unknown_retry(fleet):
+    from operation_locks import endpoint_key
+    fleet.enable();worker=fleet.worker(True)
+    with resource_lock(endpoint_key('192.0.2.1',502)):
+        assert worker.run_cycle()=='deferred'
+    assert fleet.clients==[] and budget.load()['state']['pending']==[]
+    # Same data does not immediately retry; a new monitor cycle is required.
+    assert worker.run_cycle()=='waiting' and fleet.clients==[]
+    fleet.observe()
+    assert worker.run_cycle()=='awaiting_readback' and len(fleet.clients)==20
+    with Session(fleet.engine) as session:
+        assert session.scalar(select(CommandAudit.result).where(CommandAudit.source=='automation').order_by(CommandAudit.id))=='deferred'
 
 
 def test_preview_expiry_one_time_and_snapshot_changes(fleet):

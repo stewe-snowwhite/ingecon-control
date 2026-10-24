@@ -14,6 +14,7 @@ import stat
 from operation_locks import OperationBusy, endpoint_key, resource_lock
 
 PROFILE = 'ingecon_3play_test_v1'
+BUSY_MESSAGE = 'Інша Modbus-операція вже виконується; запис не виконувався.'
 AUTHORIZATION = dict(enabled=True, profile=PROFILE, scope='all_registered_100tl',
                      acknowledge_unverified_firmware=True)
 
@@ -131,7 +132,7 @@ def execute(inverter, transport, action, value=100, *, allow_write=False):
             finally:
                 if client is not None: client.close()
     except OperationBusy:
-        return result(False, 'Інша Modbus-операція вже виконується; запис не виконувався.')
+        return result(False, BUSY_MESSAGE)
     except Exception:
         return result(False, 'Результат невідомий; автоматичного повторення немає. Перевірте стан інвертора.')
 

@@ -7,6 +7,7 @@ import signal
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from sqlalchemy import create_engine, inspect, select
@@ -16,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from models import Inverter, MonitorConfig, MonitorHeartbeat
 from monitoring import NetworkProbes, apply_observation, target_for
-from operation_locks import resource_lock
+from operation_locks import endpoint_key, resource_lock
 import monitor_schedule
 
 log = logging.getLogger(__name__)
@@ -24,9 +25,12 @@ log = logging.getLogger(__name__)
 
 class MonitorWorker:
     def __init__(self, engine, probes=None, interval=30, stop_event=None,
-                 clock=time.time, monotonic=time.monotonic):
+                 clock=time.time, monotonic=time.monotonic, workers=1):
         if not math.isfinite(interval) or not 1 <= interval <= 86400:
             raise ValueError('Interval must be 1–86400 seconds')
+        if type(workers) is not int or not 1 <= workers <= 8:
+            raise ValueError('Workers must be 1–8')
+        self.workers = workers
         self.engine = engine
         self.probes = probes or NetworkProbes()
         self.interval = interval
@@ -81,10 +85,10 @@ class MonitorWorker:
             self._has_started = True
         pending = []
         last_flush = self.monotonic()
-        for target in targets:
+        for observation in self._observations(targets):
             if self.stop_event.is_set():
                 break
-            pending.append(self.probes.poll(target))
+            pending.append(observation)
             if self.monotonic()-last_flush >= self.interval:
                 self._flush(pending, duration=self.monotonic()-start)
                 pending = []
@@ -92,6 +96,30 @@ class MonitorWorker:
         duration = self.monotonic()-start
         self._flush(pending, duration=duration)
         return duration
+
+    def _observations(self, targets):
+        if self.workers == 1:
+            for target in targets:
+                if self.stop_event.is_set():break
+                yield self.probes.poll(target)
+            return
+        groups = {}
+        for target in targets:
+            groups.setdefault(endpoint_key(target.host,target.port),[]).append(target)
+        def poll_group(group):
+            results=[]
+            for target in group:
+                if self.stop_event.is_set():break
+                results.append(self.probes.poll(target))
+            return results
+        # SQLite stays on the main thread. A gateway's unit IDs are serialized.
+        with ThreadPoolExecutor(max_workers=self.workers,thread_name_prefix='monitor') as pool:
+            futures=[pool.submit(poll_group,group) for group in groups.values()]
+            try:
+                for future in as_completed(futures):
+                    yield from future.result()
+            finally:
+                for future in futures:future.cancel()
 
     def _refresh_interval(self):
         # Read a tiny shared file. Expiry needs no writes, service restart or web session.
@@ -174,6 +202,7 @@ def parser():
     result.add_argument('--database-uri', default=os.environ.get('INGECON_DATABASE_URI', 'sqlite:///database.db'))
     result.add_argument('--interval', type=float, default=os.environ.get('INGECON_MONITOR_INTERVAL', '30'))
     result.add_argument('--timeout', type=float, default=os.environ.get('INGECON_PROBE_TIMEOUT', '2'))
+    result.add_argument('--workers',type=int,default=1,help='1–8 independent endpoints; gateway unit IDs remain sequential')
     result.add_argument('--once', action='store_true', help='One cycle, then mark the monitor stopped')
     return result
 
@@ -183,12 +212,13 @@ def main(argv=None):
     # Validate before opening the DB, creating lock files, or touching the network.
     if not math.isfinite(args.interval) or not 1 <= args.interval <= 86400:
         raise ValueError('Interval must be 1–86400 seconds')
+    if not 1<=args.workers<=8:raise ValueError('Workers must be 1–8')
     probes = NetworkProbes(timeout=args.timeout)
     url = database_url(args.database_uri)
     if not Path(url.database).is_file():
         raise RuntimeError('Database does not exist; initialize it explicitly after backup.')
     engine = create_engine(url, connect_args={'timeout': 5})
-    worker = MonitorWorker(engine, probes, args.interval)
+    worker = MonitorWorker(engine, probes, args.interval, workers=args.workers)
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda signum, frame: worker.stop_event.set())
     # Log state/error changes, not every failed PyModbus packet.
