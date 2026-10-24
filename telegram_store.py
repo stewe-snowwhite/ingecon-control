@@ -17,6 +17,7 @@ from monitoring import current_statuses
 from telegram_control import TelegramControlPolicy
 from modbus_config import load_configuration
 import modbus_safety
+import monitor_refresh
 
 CODE = re.compile(r'[A-Za-z0-9_-]{32}', re.ASCII)
 LIMIT_INPUT_SECONDS = 300
@@ -167,6 +168,16 @@ class TelegramStore:
             self.user(session,telegram_id)
             now = self.clock()
             return dict(current_statuses(session,now=now), generated_at=now)
+
+    def request_status_refresh(self,telegram_id):
+        with self.sessions.begin() as session:
+            self.user(session,telegram_id)
+            return monitor_refresh.request(session,self.clock())
+
+    def status_refresh_progress(self,telegram_id,ticket):
+        with self.sessions() as session:
+            self.user(session,telegram_id)
+            return monitor_refresh.progress(session,ticket,self.clock())
 
     def inventory(self, telegram_id, kind, page=0):
         if kind not in ('i','g') or type(page) is not int or not 0 <= page <= 100000:

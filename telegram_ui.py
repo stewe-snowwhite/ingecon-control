@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import math
+import time
 from datetime import datetime, timezone
 
 from aiogram import BaseMiddleware, Dispatcher, F, Router
@@ -19,6 +20,9 @@ from power_budget import watts
 
 MESSAGE_PART_LIMIT = 3500  # Conservative UTF-16 budget below Telegram's text limit.
 SEND_PART_DELAY = 1
+STATUS_WAIT_SECONDS = 15
+STATUS_POLL_SECONDS = 0.5
+status_sleep = asyncio.sleep
 
 log = logging.getLogger('ingecon.telegram')
 HELP = ('Команди: /start, /status, /inverters, /groups, /history, /help.\n'
@@ -46,13 +50,13 @@ def power_text(watts):
     return f'{watts/1000:.2f}'.replace('.', ',')+' кВт' if watts is not None else '—'
 
 
-def generation_text(snapshot):
+def generation_text(snapshot, *, label='Поточна генерація'):
     rows = snapshot['inverters']
     values = [(row,power_value(row)) for row in rows]
     known = [(row,value) for row,value in values if value is not None]
     if not known:
-        return 'Поточна генерація: — ('+('немає обладнання' if not rows else 'немає актуальних даних')+')'
-    text = 'Поточна генерація: '+power_text(sum(value for _,value in known))
+        return label+': — ('+('немає обладнання' if not rows else 'немає актуальних даних')+')'
+    text = label+': '+power_text(sum(value for _,value in known))
     if len(known) != len(rows):
         text += f' (часткові дані {len(known)}/{len(rows)})'
     times = [row['checked_at'] for row,_ in known if type(row.get('checked_at')) in (int,float) and math.isfinite(row['checked_at'])]
@@ -205,14 +209,6 @@ def build_dispatcher(store):
 
     def screen(telegram_id, section):
         username,role = store.identity(telegram_id)
-        if section=='status':
-            snapshot = store.snapshot(telegram_id)
-            counts = {state:sum(row['state']==state for row in snapshot['inverters'])
-                      for state in ('Online','Offline','Degraded','Unknown')}
-            text = f"Усього: {len(snapshot['inverters'])}\n"+' · '.join(f'{key}: {value}' for key,value in counts.items())
-            text += '\nМонітор: '+('активний' if snapshot['monitor']['alive'] else 'зупинений або дані застарілі')
-            text += '\nСтаном на '+utc(snapshot['generated_at'])+'\n'+generation_text(snapshot)
-            return text,menu(role, store.controls_enabled)
         if section=='history':
             events = store.history(telegram_id)
             text = 'Останні події (UTC):'+('\nПодій немає.' if not events else '')
@@ -241,6 +237,32 @@ def build_dispatcher(store):
         if section=='help':
             return HELP+'\n'+control_note(),menu(role, store.controls_enabled)
         return f'Авторизовано: {clean(username)}. Оберіть дії:',menu(role, store.controls_enabled)
+
+    async def fresh_status(telegram_id,bot):
+        ticket,result=store.request_status_refresh(telegram_id)
+        if result['state']=='pending':
+            await send(bot,telegram_id,f"Оновлюю показники {result['total']} інверторів…")
+            deadline=time.monotonic()+STATUS_WAIT_SECONDS
+            while result['state']=='pending':
+                result=store.status_refresh_progress(telegram_id,ticket)
+                remaining=deadline-time.monotonic()
+                if result['state']!='pending' or remaining<=0:break
+                await status_sleep(min(STATUS_POLL_SECONDS,remaining))
+        # Identity is rechecked after waiting, including unlink/password/role changes.
+        _,role=store.identity(telegram_id)
+        snapshot=result['snapshot']
+        refreshed=result['state'] in ('refreshed','empty')
+        notes={'refreshed':f"Опитування на запит завершено: перевірено {result['completed']}/{result['total']}.",
+               'empty':'Обладнання не додано.',
+               'pending':f"Свіже опитування ще не завершено ({result['completed']}/{result['total']}). Нижче останні отримані дані, не підтверджені на момент запиту.",
+               'monitor_unavailable':'Монітор неактивний або heartbeat застарів. Нові виміри не отримано.',
+               'inventory_changed':'Склад або параметри обладнання змінилися під час оновлення. Натисніть «Статус» повторно.'}
+        counts={state:sum(row['state']==state for row in snapshot['inverters']) for state in ('Online','Offline','Degraded','Unknown')}
+        text=notes[result['state']]+f"\nУсього: {len(snapshot['inverters'])}\n"+' · '.join(f'{key}: {value}' for key,value in counts.items())
+        text+='\nМонітор: '+('активний' if snapshot['monitor']['alive'] else 'зупинений або дані застарілі')
+        text+='\nСтаном на '+utc(snapshot['generated_at'])+' (час відповіді)\n'
+        text+=generation_text(snapshot,label='Поточна генерація' if refreshed else 'Остання відома генерація')
+        await send(bot,telegram_id,text,menu(role,store.controls_enabled))
 
     async def message_handler(message, bot):
         telegram_id = message.from_user.id
@@ -273,6 +295,9 @@ def build_dispatcher(store):
             if command=='start' and len(pieces)==2:
                 store.redeem(telegram_id,pieces[1].strip())
             store.cancel_limit_input(telegram_id)
+            if command=='status':
+                await fresh_status(telegram_id,bot)
+                return
             if command=='inverters':
                 text,markup = listing(telegram_id,'i')
             elif command=='groups':
@@ -308,6 +333,9 @@ def build_dispatcher(store):
                 raise TelegramAccess('Некоректна кнопка.')
             if parts[0]=='menu' and len(parts)==2 and parts[1] in ('start','status','history','help','control','notifications','power'):
                 store.cancel_limit_input(telegram_id)
+                if parts[1]=='status':
+                    await fresh_status(telegram_id,bot)
+                    return
                 text,markup = screen(telegram_id,parts[1])
             elif parts[0]=='list' and len(parts)==3 and parts[1] in ('i','g','ng','a'):
                 store.cancel_limit_input(telegram_id)

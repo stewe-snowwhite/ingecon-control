@@ -19,6 +19,7 @@ from models import Inverter, MonitorConfig, MonitorHeartbeat
 from monitoring import NetworkProbes, apply_observation, target_for
 from operation_locks import endpoint_key, resource_lock
 import monitor_schedule
+import monitor_refresh
 
 log = logging.getLogger(__name__)
 
@@ -133,6 +134,9 @@ class MonitorWorker:
     def _wait_for_next_cycle(self, started, completed):
         while not self.stop_event.is_set():
             self._refresh_interval()
+            if self.monotonic()-started>=monitor_refresh.MIN_REQUEST_INTERVAL:
+                with Session(self.engine) as session:
+                    if monitor_refresh.pending(session):return
             # Re-read once a second so shorter intervals and 30-minute expiry take
             # effect even while waiting on a much longer configured interval.
             deadline = started+self.interval
