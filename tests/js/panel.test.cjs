@@ -23,8 +23,9 @@ class FormDataDouble {
 }
 function ui(override={}, actionUrl='/control') {
   const ids = ['theme-toggle','command-dialog','page-alert','cancel-command','confirm-command',
-    'confirmation-title','confirmation-description','confirmation-targets','result-list','command-results','dashboard'];
+    'confirmation-title','confirmation-description','confirmation-targets','confirmation-note','result-list','command-results','dashboard'];
   const elements=new Map(ids.map(id=>[id,new Element()]));
+  elements.get('confirmation-note').hidden=false;
   const form=new Element(); form.id='control-form'; form.setAttribute('id','control-form'); form.setAttribute('action',actionUrl);
   // HTMLFormElement named access shadows .action when buttons share name=action.
   Object.defineProperty(form,'action',{configurable:true,get:()=>({[Symbol.toStringTag]:'RadioNodeList'})});
@@ -83,14 +84,19 @@ test('confirmation cannot double-submit and displays per-device results', async(
   assert.match(browser.elements.get('result-list').children[0].textContent,/Інвертор видалено/);
 });
 
-test('control preview shows real-write warning and the exact transport and command', async()=>{
-  const browser=ui({action:'limit',label:'Обмежити потужність',value:37,
+for (const action of ['limit','limit_max']) for (const oldMarkup of [false,true]) test(action+(oldMarkup ? ' cached markup' : '')+': compact preview shows only percentage and target list', async()=>{
+  const browser=ui({action,label:'Обмежити потужність',value:37,
     inverters:[{id:1,name:'100TL',ip_address:'192.0.2.1',command:{port:1502,device_id:7,function:16,address:1000,values:[3,12123]}}]});
+  const note=browser.elements.get('confirmation-note');
+  if (oldMarkup) {
+    browser.elements.delete('confirmation-note');
+    browser.elements.get('command-dialog').querySelector=selector=>selector==='.notice.warning' ? note : null;
+  }
   await browser.submit();
-  assert.match(browser.elements.get('confirmation-description').textContent,/реальний Modbus-запис/);
-  assert.match(browser.elements.get('confirmation-description').textContent,/прошивки не підтверджена/);
+  assert.equal(browser.elements.get('confirmation-description').textContent,action==='limit' ? '37%' : '100%');
+  assert.equal(note.hidden,true);
   assert.equal(browser.elements.get('confirmation-targets').children[0].textContent,
-    '100TL · 192.0.2.1 · TCP 1502, Unit ID 7, FC16, HR1000, слова [3, 12123]');
+    '100TL · 192.0.2.1');
   assert.equal(browser.calls.length,1);
 });
 
