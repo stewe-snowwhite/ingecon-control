@@ -5,7 +5,7 @@ import time
 import hashlib
 from sqlalchemy import update
 from sqlalchemy.exc import SQLAlchemyError
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
 
 import click
@@ -34,6 +34,7 @@ import monitor_schedule
 from monitor_web import web as monitor_web
 from telegram_store import TelegramStore
 from power_web import web as power_web
+from time_display import format_kyiv
 
 csrf = CSRFProtect()
 ALL_ROLES = ROLES
@@ -92,10 +93,9 @@ def create_app(config=None):
     # Shared templates remain safe until existing workers load the new routes.
     app.config['SETTINGS_AVAILABLE'] = True
     app.jinja_env.filters['monitor_reason'] = explain_reason
-    app.jinja_env.filters['utc_time'] = lambda value: (
-        datetime.fromtimestamp(value, timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-        if value is not None else '—'
-    )
+    app.config['DISPLAY_TIMEZONE'] = 'Europe/Kyiv'
+    # Keep the existing filter name for templates cached by older workers.
+    app.jinja_env.filters['utc_time'] = format_kyiv
 
     @app.after_request
     def security_headers(response):

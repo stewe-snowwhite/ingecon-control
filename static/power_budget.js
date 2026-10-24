@@ -14,7 +14,7 @@
       el('budget-actual').textContent = power(data.actual_w);
       el('budget-coverage').textContent = '(' + (data.known || 0) + '/' + (data.total || 0) + ' пристроїв)';
       el('budget-reason').textContent = data.reason;
-      el('budget-updated').textContent = data.last_cycle_at ? 'Контролер: ' + new Date(data.last_cycle_at * 1000).toLocaleString('uk-UA') : 'Очікування контролера';
+      el('budget-updated').textContent = data.last_cycle_at != null ? 'Контролер: ' + new Date(data.last_cycle_at * 1000).toLocaleString('uk-UA', {timeZone: 'Europe/Kyiv'}) + ' (Київ)' : 'Очікування контролера';
       el('budget-error').hidden = true;
     } catch (_) {
       el('budget-error').textContent = 'Не вдалося оновити стан автоматизації. Показані дані можуть бути застарілими.';

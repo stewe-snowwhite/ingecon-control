@@ -1,3 +1,4 @@
+{% set display_zone = 'Київ' if config.get('DISPLAY_TIMEZONE') == 'Europe/Kyiv' else 'UTC' %}
 {% from 'limit_reasons.html' import reason %}
 <tr data-id="{{ inverter.id }}">
 {% if g.user.role != 'Viewer' %}<td class="select-cell" data-label="Обрати"><input type="checkbox" name="selected_ids" value="{{ inverter.id }}" aria-label="Обрати {{ inverter.name }}"></td>{% endif %}
@@ -5,7 +6,7 @@
 <td data-label="Група"><span class="group-tag">{{ inverter.group }}</span></td>
 <td data-label="Доступність"><span class="badge {{ inverter.state | lower }}">{{ inverter.state }}</span>{% if inverter.stale %}<small class="muted">Застарілі дані</small>{% endif %}{% if inverter.check_requested %}<small class="muted">Перевірку заплановано</small>{% endif %}{% if inverter.reason %}<small class="muted">{{ inverter.reason | monitor_reason }}</small>{% endif %}</td>
 <td data-label="Перевірки"><div class="probe-list">{% for name, result in inverter.checks.items() %}<span class="probe {{ 'ok' if result.ok is sameas true else 'failed' if result.ok is sameas false else 'unavailable' }}" title="{{ result.error or 'Без помилки' }}">{{ name | upper }} {{ '✓' if result.ok is sameas true else '×' if result.ok is sameas false else '—' }}</span>{% endfor %}</div><small class="muted">Затримка Modbus (мс): {{ inverter.latency_ms if inverter.latency_ms is not none else '—' }}</small></td>
-<td data-label="Час (UTC)"><span class="mono">{{ inverter.checked_at | utc_time }}</span><small class="muted">Остання успішна (UTC): {{ inverter.last_success_at | utc_time }}</small></td>
+<td data-label="Час ({{ display_zone }})"><span class="mono">{{ inverter.checked_at | utc_time }}</span><small class="muted">Остання успішна ({{ display_zone }}): {{ inverter.last_success_at | utc_time }}</small></td>
 <td data-label="Робочий стан" data-telemetry>{{ inverter.get('operating_state_label') or '—' }}{% if inverter.get('operating_state_code') is not none %}<small class="muted">Код: {{ inverter.operating_state_code }}</small>{% endif %}</td>
 <td data-label="Активна потужність" data-telemetry>{{ ('%.2f' | format(inverter.active_power_w / 1000)).replace('.', ',') ~ ' кВт' if inverter.get('active_power_w') is not none else '—' }}</td>
 <td data-label="Ліміт" data-telemetry>{{ ('%g' | format(inverter.power_limit_percent)) ~ '%' if inverter.power_limit_percent is not none else '—' }}</td>

@@ -1,4 +1,6 @@
 {% extends 'base.html' %}
+{% set display_zone = 'Київ' if config.get('DISPLAY_TIMEZONE') == 'Europe/Kyiv' else 'UTC' %}
+
 {% block title %}Загальний ліміт потужності{% endblock %}
 {% block scripts %}<script src="{{ url_for('static',filename='power_budget.js') }}" defer></script>{% endblock %}
 {% block content %}
@@ -8,7 +10,7 @@
 <p id="budget-enabled">{{ 'Автоматизацію увімкнено' if budget.enabled else 'Автоматизацію вимкнено' }}</p>
 <p>Задано: <strong id="budget-target">{{ kw(budget.target_w) ~ ' кВт' if budget.get('target_w') else '—' }}</strong></p>
 <p>Поточна генерація: <strong id="budget-actual">{{ kw(budget.actual_w) ~ ' кВт' if budget.get('actual_w') is not none else '—' }}</strong> <span id="budget-coverage">({{ budget.get('known',0) }}/{{ budget.get('total',0) }} пристроїв)</span></p>
-<p id="budget-reason" role="status">{{ budget.reason }}</p><p id="budget-updated">Контролер: {{ budget.get('last_cycle_at') | utc_time }} UTC</p>
+<p id="budget-reason" role="status">{{ budget.reason }}</p><p id="budget-updated">Контролер: {{ budget.get('last_cycle_at') | utc_time }} ({{ display_zone }})</p>
 <p id="budget-error" class="notice danger" hidden role="alert"></p>
 {% if g.user.role == 'Administrator' %}
 {% if preview %}

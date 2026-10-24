@@ -100,13 +100,26 @@ test('equal values have stable ID ordering; absent numeric values remain last in
   assert.deepEqual(model.sortRows(sortSample,'name','invalid'), sortSample);
 });
 
-test('UTC timestamps and malformed API responses', () => {
-  assert.equal(model.formatUtc(0),'1970-01-01 00:00:00');
-  assert.equal(model.formatUtc(null),'—');
+test('Kyiv timestamps and malformed API responses', () => {
+  assert.equal(model.formatKyiv(0),'1970-01-01 03:00:00');
+  assert.equal(model.formatKyiv(null),'—');
+  assert.equal(model.formatKyiv(undefined),'—');
   assert.equal(model.validSnapshot(sample()),true);
   for (const data of [null, {}, {...sample(),generated_at:NaN}, {...sample(),inverters:[{}]}]) {
     assert.ok(!model.validSnapshot(data));
   }
+});
+
+test('Kyiv display follows winter/summer and both DST transitions independently of browser timezone', () => {
+  for (const [utc, expected] of [
+    ['2026-01-15T12:00:00Z', '2026-01-15 14:00:00'],
+    ['2026-07-15T12:00:00Z', '2026-07-15 15:00:00'],
+    ['2026-07-15T22:00:00Z', '2026-07-16 01:00:00'],
+    ['2026-03-29T00:59:59Z', '2026-03-29 02:59:59'],
+    ['2026-03-29T01:00:00Z', '2026-03-29 04:00:00'],
+    ['2026-10-25T00:59:59Z', '2026-10-25 03:59:59'],
+    ['2026-10-25T01:00:00Z', '2026-10-25 03:00:00']
+  ]) assert.equal(model.formatKyiv(Date.parse(utc)/1000), expected);
 });
 
 test('power uses watts with explicit kW display, including zero and reverse flow', () => {
@@ -194,10 +207,11 @@ function browserDouble(initiallyFail=false, reasonCode=1, includeCatalog=true, o
     const item = new Element(); item.dataset.count=key; item.textContent=(key==='total' || key==='Online') ? '1' : '0'; return item;
   });
   const listeners = {};
+  const timeHeader = new Element('th'); timeHeader.textContent = 'Остання перевірка (UTC)';
   const document = {
     hidden:false, activeElement:null, getElementById:id=>elements.get(id),
     createElement:tag=>new Element(tag), createDocumentFragment:()=>new Element('fragment'),
-    querySelectorAll:selector=>selector==='[data-count]' ? countElements : [],
+    querySelectorAll:selector=>selector==='[data-count]' ? countElements : selector==='.device-table th' ? [timeHeader] : [],
     addEventListener:(key,fn)=>{listeners[key]=fn;}
   };
   let fail = initiallyFail; let status = 200; let requests = 0; let elapsed = 0; let rowData=options.rows;
@@ -237,12 +251,21 @@ function browserDouble(initiallyFail=false, reasonCode=1, includeCatalog=true, o
   });
   const browserOptions=options;
   vm.runInContext(fs.readFileSync('static/dashboard.js','utf8'),context);
-  return {elements,document,listeners,timers,countElements,context,sortButtons,setRows:rows=>{rowData=rows;},
+  return {elements,document,listeners,timers,countElements,context,sortButtons,timeHeader,setRows:rows=>{rowData=rows;},
     posts,advance:milliseconds=>{elapsed+=milliseconds;},serverTime:value=>{generatedAt=value;},
     fail:()=>{fail=true;}, recover:()=>{fail=false;}, expire:()=>{elapsed=100000;},
     deny:()=>{status=401;}, requests:()=>requests};
 }
 const settle = () => new Promise(resolve=>setImmediate(resolve));
+
+test('cached UTC headings change together with API-rendered Kyiv timestamps', async () => {
+  const browser=browserDouble();
+  await settle();
+  assert.equal(browser.timeHeader.textContent, 'Остання перевірка (Київ)');
+  assert.match(browser.elements.get('heartbeat-time').textContent, /Heartbeat \(Київ\)/);
+  assert.match(browser.elements.get('refresh-label').textContent, /\(Київ\)/);
+  assert.equal(browser.elements.get('device-rows').children[0].children[4].dataset.label, 'Час (Київ)');
+});
 async function nextPoll(browser, milliseconds=30000) {
   const entry = [...browser.timers.entries()].find(([,value])=>value.ms===milliseconds);
   assert.ok(entry,'next poll scheduled');

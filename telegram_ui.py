@@ -3,7 +3,6 @@ import asyncio
 import logging
 import math
 import time
-from datetime import datetime, timezone
 
 from aiogram import BaseMiddleware, Dispatcher, F, Router
 from aiogram.exceptions import (TelegramAPIError, TelegramBadRequest, TelegramForbiddenError,
@@ -17,6 +16,7 @@ from telegram_store import TelegramAccess
 from commands import MAX_CONTROL_TARGETS
 from power_telegram import PowerTelegram
 from power_budget import watts
+from time_display import format_kyiv
 
 MESSAGE_PART_LIMIT = 3500  # Conservative UTF-16 budget below Telegram's text limit.
 SEND_PART_DELAY = 1
@@ -37,8 +37,8 @@ def clean(value):
     return ''.join(char if char.isprintable() else ' ' for char in str(value))[:100]
 
 
-def utc(value):
-    return datetime.fromtimestamp(value,timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+def kyiv_time(value):
+    return format_kyiv(value)+' (Київ)' if value is not None else '—'
 
 
 def power_value(row):
@@ -62,7 +62,7 @@ def generation_text(snapshot, *, label='Поточна генерація'):
     times = [row['checked_at'] for row,_ in known if type(row.get('checked_at')) in (int,float) and math.isfinite(row['checked_at'])]
     if times:
         first,last=min(times),max(times)
-        text += '\nВиміри: '+(utc(first)+' — ' if first!=last else '')+utc(last)
+        text += '\nВиміри: '+(kyiv_time(first)+' — ' if first!=last else '')+kyiv_time(last)
     return text
 
 
@@ -211,9 +211,9 @@ def build_dispatcher(store):
         username,role = store.identity(telegram_id)
         if section=='history':
             events = store.history(telegram_id)
-            text = 'Останні події (UTC):'+('\nПодій немає.' if not events else '')
+            text = 'Останні події (Київ):'+('\nПодій немає.' if not events else '')
             for event_id,name,previous,state,occurred in events:
-                text += f'\n#{event_id} {clean(name)}: {previous} → {state}\n{utc(occurred)}'
+                text += f'\n#{event_id} {clean(name)}: {previous} → {state}\n{kyiv_time(occurred)}'
             return text,menu(role, store.controls_enabled)
         if section=='control':
             if role=='Viewer':
@@ -260,7 +260,7 @@ def build_dispatcher(store):
         counts={state:sum(row['state']==state for row in snapshot['inverters']) for state in ('Online','Offline','Degraded','Unknown')}
         text=notes[result['state']]+f"\nУсього: {len(snapshot['inverters'])}\n"+' · '.join(f'{key}: {value}' for key,value in counts.items())
         text+='\nМонітор: '+('активний' if snapshot['monitor']['alive'] else 'зупинений або дані застарілі')
-        text+='\nСтаном на '+utc(snapshot['generated_at'])+' (час відповіді)\n'
+        text+='\nСтаном на '+kyiv_time(snapshot['generated_at'])+' (час відповіді)\n'
         text+=generation_text(snapshot,label='Поточна генерація' if refreshed else 'Остання відома генерація')
         await send(bot,telegram_id,text,menu(role,store.controls_enabled))
 
@@ -440,7 +440,7 @@ async def notification_batch(store, bot):
         delivery_id,telegram_id,event = item
         seen.add(telegram_id)  # At most one message per recipient in this 5-second batch.
         event_id,name,previous,state,occurred = event
-        text = f'Подія #{event_id}: {clean(name)}\n{previous} → {state}\n{utc(occurred)}\nДжерело: журнал станів SQLite.'
+        text = f'Подія #{event_id}: {clean(name)}\n{previous} → {state}\n{kyiv_time(occurred)}\nДжерело: журнал станів SQLite.'
         try:
             reply = await send(bot,telegram_id,text)
         except TelegramRetryAfter as error:

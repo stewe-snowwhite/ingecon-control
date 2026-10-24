@@ -45,7 +45,7 @@ def test_status_command_and_button_show_current_generation_time_and_no_probes(tg
     tg.feed(text=entry) if entry.startswith('/') else tg.feed(data=entry)
     text=tg.api.messages[-1].text
     assert 'Поточна генерація: 63,98 кВт' in text
-    assert 'Станом на' in text and 'Виміри:' in text and 'UTC' in text
+    assert 'Станом на' in text and 'Виміри:' in text and 'Київ' in text
     assert modbus[1]==[]
 
 

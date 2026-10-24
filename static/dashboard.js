@@ -1,9 +1,14 @@
 'use strict';
 (() => {
   const STATES = ['Online', 'Offline', 'Degraded', 'Unknown'];
-  function formatUtc(value) {
+  const kyivClock = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Kyiv', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+  });
+  function formatKyiv(value) {
     if (value === null || value === undefined) return '—';
-    return new Date(value * 1000).toISOString().replace('T', ' ').slice(0, 19);
+    const p = Object.fromEntries(kyivClock.formatToParts(new Date(value * 1000)).map(part => [part.type, part.value]));
+    return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
   }
   function filterRows(rows, filters) {
     const q = filters.q.trim().toLocaleLowerCase();
@@ -82,7 +87,7 @@
         ['icmp', 'tcp', 'modbus'].every(key => row.checks[key] &&
           [true, false, null].includes(row.checks[key].ok)));
   }
-  const model = {formatUtc, formatPower, formatLimitReason, pollingPolicy, filterRows, sortRows, counts, freshSnapshot, validSnapshot};
+  const model = {formatKyiv, formatPower, formatLimitReason, pollingPolicy, filterRows, sortRows, counts, freshSnapshot, validSnapshot};
   if (typeof module !== 'undefined' && module.exports) module.exports = model;
   if (typeof document === 'undefined') return;
   const root = document.getElementById('dashboard');
@@ -141,9 +146,9 @@
       badge.title = result.error || 'Без помилки'; probes.append(badge);
     });
     checks.append(probes, node('small', 'Затримка Modbus (мс): ' + (row.latency_ms ?? '—'), 'muted'));
-    const checked = cell('Час (UTC)');
-    checked.append(node('span', formatUtc(row.checked_at), 'mono'),
-      node('small', 'Остання успішна (UTC): ' + formatUtc(row.last_success_at), 'muted'));
+    const checked = cell('Час (Київ)');
+    checked.append(node('span', formatKyiv(row.checked_at), 'mono'),
+      node('small', 'Остання успішна (Київ): ' + formatKyiv(row.last_success_at), 'muted'));
     const operating = cell('Робочий стан'); operating.dataset.telemetry = '';
     operating.append(node('span', row.operating_state_label ?? '—'));
     if (row.operating_state_code != null) operating.append(node('small', 'Код: ' + row.operating_state_code, 'muted'));
@@ -187,14 +192,18 @@
     }
     if (el('polling-reset')) el('polling-reset').disabled = settingsPending || !policy.temporary;
     if (el('polling-seconds') && document.activeElement !== el('polling-seconds')) el('polling-seconds').value = String(policy.interval_seconds);
-    if (panel.connected) el('refresh-label').textContent = 'Оновлено · ' + formatUtc(snapshot.generated_at) + ' UTC · кожні ' + policy.interval_seconds + ' с';
+    if (panel.connected) el('refresh-label').textContent = 'Оновлено · ' + formatKyiv(snapshot.generated_at) + ' (Київ) · кожні ' + policy.interval_seconds + ' с';
+    // Old workers may still serve a cached UTC heading until their restart.
+    document.querySelectorAll('.device-table th').forEach(header => {
+      if (header.textContent.includes('(UTC)')) header.textContent = header.textContent.replace('(UTC)', '(Київ)');
+    });
     const current = freshSnapshot(snapshot, now);
     const summary = counts(current.inverters);
     document.querySelectorAll('[data-count]').forEach(item => { item.textContent = summary[item.dataset.count]; });
     const monitor = current.monitor;
     el('heartbeat').textContent = monitor.alive ? 'Монітор активний' : 'Монітор неактивний або дані застарілі';
     el('heartbeat').className = 'badge ' + (monitor.alive ? 'online' : 'unknown');
-    el('heartbeat-time').textContent = 'Heartbeat (UTC): ' + formatUtc(monitor.last_seen);
+    el('heartbeat-time').textContent = 'Heartbeat (Київ): ' + formatKyiv(monitor.last_seen);
     el('monitor-detail').textContent = 'Інтервал ' + monitor.interval_seconds + ' с · Актуальність ' + monitor.stale_after_seconds + ' с';
     el('connection-warning').hidden = monitor.alive && !current.inverters.some(row => row.stale);
     el('connection-warning').textContent = !monitor.alive ?

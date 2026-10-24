@@ -158,7 +158,7 @@ def test_stale_status_and_history_use_cached_data(tg):
     tg.feed('/status')
     assert 'Unknown: 3' in tg.api.messages[-1].text and 'застарілі' in tg.api.messages[-1].text
     tg.feed('/history')
-    assert 'Online → Offline' in tg.api.messages[-1].text and 'UTC' in tg.api.messages[-1].text
+    assert 'Online → Offline' in tg.api.messages[-1].text and 'Київ' in tg.api.messages[-1].text
 
 
 @pytest.mark.parametrize('command',['status','inverters','groups','history','control','notifications'])

@@ -302,7 +302,7 @@ IP + порт, спільний для різних device ID через оди�
   `stale`, `check_requested`, `checked_at`, `last_success_at`, `latency_ms`,
   `reason`, `power_limit_percent`, незалежні результати у `checks`.
 
-Час API — Unix timestamp у секундах UTC; панель форматує його як UTC.
+Час API — Unix timestamp у секундах UTC; панель форматує його за `Europe/Kyiv`, автоматично враховуючи літній/зимовий час.
 Паролі інверторів, хеші користувачів та секрети сесій у відповідь не потрапляють.
 API не викликає мережевих перевірок і не змінює стан БД.
 

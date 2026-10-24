@@ -1,10 +1,11 @@
 """DB-only dashboard helpers; no monitoring or control transport calls."""
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import secrets
 
 from flask import abort, request
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from commands import command_payload
+from time_display import KYIV
 
 STATES = ('Online', 'Offline', 'Degraded', 'Unknown')
 ACTIONS = {'on': 'Увімкнути', 'off': 'Вимкнути', 'limit': 'Обмежити потужність',
@@ -33,7 +34,7 @@ def dashboard_snapshot(snapshot, selected):
 
 def date_filter(value, end=False):
     try:
-        parsed = datetime.strptime(value, '%Y-%m-%d').replace(tzinfo=timezone.utc)
+        parsed = datetime.strptime(value, '%Y-%m-%d').replace(tzinfo=KYIV)
         if parsed.strftime('%Y-%m-%d') != value:
             raise ValueError
         return (parsed + timedelta(days=1) if end else parsed).timestamp()

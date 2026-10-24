@@ -1,4 +1,6 @@
 {% extends 'base.html' %}
+{% set display_zone = 'Київ' if config.get('DISPLAY_TIMEZONE') == 'Europe/Kyiv' else 'UTC' %}
+
 {% block title %}Огляд інверторів{% endblock %}
 {% block scripts %}<script src="{{ url_for('static', filename='dashboard.js') }}" defer></script>{% endblock %}
 {% block content %}
@@ -7,13 +9,13 @@
 <div class="page-heading"><div><p class="eyebrow">ОГЛЯД СИСТЕМИ</p><h1>Інвертори</h1><p class="muted">Доступність, зв’язок та останні результати перевірок.</p></div><div class="live-note"><span class="live-dot"></span><span id="refresh-label">Оновлення кожні 30 секунд</span></div></div>
 <div class="summary" aria-label="Загальна статистика">{% for key, label in [('total','Усього інверторів'), ('Online','Online'), ('Offline','Offline'), ('Degraded','Degraded'), ('Unknown','Unknown')] %}
 <article class="summary-card {{ key | lower }}"><span class="summary-label">{{ label }}</span><strong data-count="{{ key }}">{{ counts[key] }}</strong><small>{{ 'У всіх групах' if key == 'total' else 'Поточний ефективний стан' }}</small></article>{% endfor %}</div>
-<section class="monitor-strip" aria-label="Стан монітора"><div><span id="heartbeat" class="badge {{ 'online' if monitor.alive else 'unknown' }}">{{ 'Монітор активний' if monitor.alive else 'Монітор неактивний або дані застарілі' }}</span><span id="heartbeat-time" class="muted">Heartbeat (UTC): {{ monitor.last_seen | utc_time }}</span></div><span id="monitor-detail" class="muted">Інтервал {{ monitor.interval_seconds }} с · Актуальність {{ monitor.stale_after_seconds }} с</span></section>
+<section class="monitor-strip" aria-label="Стан монітора"><div><span id="heartbeat" class="badge {{ 'online' if monitor.alive else 'unknown' }}">{{ 'Монітор активний' if monitor.alive else 'Монітор неактивний або дані застарілі' }}</span><span id="heartbeat-time" class="muted">Heartbeat ({{ display_zone }}): {{ monitor.last_seen | utc_time }}</span></div><span id="monitor-detail" class="muted">Інтервал {{ monitor.interval_seconds }} с · Актуальність {{ monitor.stale_after_seconds }} с</span></section>
 <p id="connection-warning" class="notice warning" role="status" {% if monitor.alive %}hidden{% endif %}>Монітор неактивний або дані застарілі. Статуси показано як Unknown.</p>
 <p id="api-warning" class="notice danger" role="alert" hidden></p>
 {% if config.get('MONITOR_POLLING_AVAILABLE', False) %}
 <section class="surface" aria-label="Інтервал опитування">
 <h2>Оновлення даних інверторів</h2>
-<p id="polling-status" class="muted" aria-live="polite">Опитування: {{ polling.interval_seconds }} с. {% if polling.temporary %}Тимчасово до {{ polling.expires_at | utc_time }} UTC; потім — 30 с.{% else %}За замовчуванням — 30 с.{% endif %}</p>
+<p id="polling-status" class="muted" aria-live="polite">Опитування: {{ polling.interval_seconds }} с. {% if polling.temporary %}Тимчасово до {{ polling.expires_at | utc_time }} ({{ display_zone }}); потім — 30 с.{% else %}За замовчуванням — 30 с.{% endif %}</p>
 {% if g.user.role == 'Administrator' %}
 <form id="polling-form" class="filters" method="POST" action="{{ url_for('monitor_web.polling') }}">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -49,7 +51,7 @@
 {% if g.user.role == 'Administrator' %}<button class="button danger-outline" type="submit" name="action" value="delete">Видалити</button>{% endif %}</div>
 <p class="muted safety-note">{{ 'Modbus-записи заблоковані. Перевірка планується на наступний цикл монітора.' if not config.MODBUS_WRITES_ENABLED else 'Реальне керування 100TL дозволено власником для тестування. Сумісність прошивки не підтверджена. Кожна дія потребує підтвердження.' }}</p>{% endif %}
 <div class="table-wrap"><table class="device-table"><thead><tr>{% if g.user.role != 'Viewer' %}<th class="select-cell" scope="col"><input type="checkbox" id="select-all" aria-label="Обрати видимі інвертори (до 100)"></th>{% endif %}
-{% for key, label in [('name', 'Назва / IP'), ('group', 'Група'), ('', 'Доступність'), ('', 'ICMP / TCP / Modbus'), ('', 'Остання перевірка (UTC)'), ('', 'Робочий стан'), ('active_power_w', 'Активна потужність'), ('power_limit_percent', 'Обмеження (%)'), ('', 'Причина обмеження')] %}
+{% for key, label in [('name', 'Назва / IP'), ('group', 'Група'), ('', 'Доступність'), ('', 'ICMP / TCP / Modbus'), ('', 'Остання перевірка (' ~ display_zone ~ ')'), ('', 'Робочий стан'), ('active_power_w', 'Активна потужність'), ('power_limit_percent', 'Обмеження (%)'), ('', 'Причина обмеження')] %}
 <th scope="col" {% if key %}aria-sort="none"{% endif %}>{% if key %}<button type="button" class="table-sort" data-sort-key="{{ key }}" data-sort-label="{{ label }}" title="Сортувати за зростанням: {{ label }}" aria-label="Сортувати за зростанням: {{ label }}">{{ label }} <span class="sort-indicator" data-sort-indicator aria-hidden="true">↕</span></button>{% else %}{{ label }}{% endif %}</th>
 {% endfor %}</tr></thead>
 <tbody id="device-rows">{% for inverter in inverters %}{% include 'device_row.html' %}{% endfor %}</tbody></table></div>

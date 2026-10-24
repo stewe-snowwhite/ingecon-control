@@ -70,7 +70,7 @@ def test_status_waits_for_new_fc04_generation_for_entire_fleet(ready,monkeypatch
     expected=f'{sum(range(1,count+1)):.2f}'.replace('.',',')+' кВт'
     assert 'Поточна генерація: '+expected in messages[-1].text
     assert 'Остання відома' not in messages[-1].text
-    assert telegram_ui.utc(tg.clock[0]) in messages[-1].text
+    assert telegram_ui.kyiv_time(tg.clock[0]) in messages[-1].text
     assert len(clients)==count
     assert all(client.calls==[('connect',),('read_input',20,16,1),('read_input',52,3,1)] and client.closed for client in clients)
     with Session(tg.engine) as session:assert all(c.requested_at is None for c in session.scalars(select(MonitorConfig)))

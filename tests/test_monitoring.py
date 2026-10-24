@@ -532,7 +532,7 @@ def test_dashboard_renders_cached_measurements_without_polling(web, modbus):
     module.db.session.expire_all()
     html = client.get('/').get_data(as_text=True)
     assert 'Online' in html and '100%' in html
-    assert 'Остання успішна (UTC)' in html and 'Затримка Modbus (мс)' in html
+    assert 'Остання успішна (Київ)' in html and 'Затримка Modbus (мс)' in html
     assert 'class="badge online">Монітор активний' in html and modbus[1] == []
 
 
