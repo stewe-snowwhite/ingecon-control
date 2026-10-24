@@ -23,7 +23,7 @@
 <p>Одноразове підтвердження діє 120 секунд. Активований контролер виконує реальні команди ліміту. Увімкнення/вимкнення інверторів автоматично не виконується.</p>
 {% else %}
 <form method="POST" action="{{ url_for('power_web.preview') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="enable">
-<label>Загальний ліміт, кВт<input type="number" name="target_kw" min="0.001" max="100000" step="0.001" required value="{{ kw(budget.target_w).replace(',','.') if budget.get('target_w') else '400' }}"></label>
+<label>Загальний ліміт, кВт<input type="number" name="target_kw" min="0.001" max="100000" step="0.001" required placeholder="Введіть кВт" value="{{ kw(budget.target_w).replace(',','.') if budget.get('target_w') else '' }}"></label>
 <button type="submit" class="button primary">Переглянути розподіл і підтвердити</button></form>
 {% if budget.enabled %}<form method="POST" action="{{ url_for('power_web.preview') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="button" name="action" value="disable">Вимкнути автоматизацію</button></form>{% endif %}
 {% endif %}{% endif %}

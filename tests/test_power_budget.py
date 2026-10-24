@@ -280,6 +280,7 @@ def test_website_auth_csrf_confirmation_and_status(fleet):
     assert 'name="rated_kw"' not in client.get('/power-budget').text
     assert 'name="acknowledge_nominal"' not in client.get('/power-budget').text
     import re
+    assert re.search('name="target_kw"[^>]*value=""',client.get('/power-budget').text)
     intent=re.search('name="intent" value="([^"]+)"',response.text).group(1)
     assert not budget.load() and fleet.clients==[]
     assert post(client,'/power-budget/confirm',dict(intent=intent,decision='confirm')).status_code==302

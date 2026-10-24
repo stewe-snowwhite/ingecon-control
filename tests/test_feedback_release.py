@@ -35,7 +35,8 @@ def rehearsal(tmp_path,monkeypatch):
             elif action=='check':
                 assert all(states[name]['active'] for name in SERVICES)
                 # Simulate a durable NEW controller request, which rollback must preserve.
-                if len(config['pending'])==1:config['pending'].append(dict(id='2',percent=36,at=200))
+                if config['enabled'] and len(config['pending'])==1:
+                    config['pending'].append(dict(id='2',percent=36,at=200))
                 if mode[0] in ('check','foreign'):return SimpleNamespace(returncode=1,stdout='')
                 output=json.dumps(dict(known=26,total=26))
             elif action=='disable-for-rollback':
@@ -106,6 +107,15 @@ def test_failed_tag_push_keeps_healthy_deployment_running(rehearsal):
     assert result['result']=='DEPLOYED' and result['tag_push']=='pending'
 
 
+def test_disabled_budget_activation_does_not_enable_or_recreate_test_goal(rehearsal):
+    r=rehearsal;r.config.update(enabled=False,target_w=None)
+    pending=list(r.config['pending'])
+    r.activation.activate()
+    assert not r.config['enabled'] and r.config['target_w'] is None
+    assert r.config['pending']==pending
+    assert json.loads((r.directory/'feedback-result.json').read_text())['result']=='DEPLOYED'
+
+
 def test_root_is_required_before_any_mutation(rehearsal,monkeypatch):
     monkeypatch.setattr('deploy.feedback_release.os.geteuid',lambda:1000)
     with pytest.raises(PermissionError):rehearsal.activation.activate()
@@ -122,7 +132,7 @@ def test_goal_context_ignores_runtime_and_legacy_nominal_but_preserves_identity(
 
 
 @pytest.fixture
-def prepared_active(saved,monkeypatch):
+def prepared_active(saved,monkeypatch,request):
     from deploy import feedback_release as release
     import power_budget
     root,engine,path,clients=saved
@@ -137,6 +147,11 @@ def prepared_active(saved,monkeypatch):
     service=power_budget.BudgetService(engine)
     intent,_=service.preview(1,900000)
     assert service.confirm(1,intent)=='configured'
+    if getattr(request,'param',True) is False:
+        config=power_budget.load();config.update(version=1,enabled=False,target_w=None,rated_w=100000)
+        config.pop('algorithm')
+        config['state'].update(phase='disabled',armed=False)
+        power_budget.save(config)
     assert release.prepare('a'*40,'b'*40)==path
     return root,engine,path,clients
 
@@ -182,3 +197,50 @@ def test_rollback_policy_preserves_new_pending_goal_and_all_operational_rows(pre
     assert current['state']['pending']==config['state']['pending']
     assert current['state']['history']==config['state']['history']
     assert (root/'instance/production/ingecon.sqlite').read_bytes()==before and clients==[]
+
+
+@pytest.mark.parametrize('prepared_active',[False],indirect=True)
+def test_inactive_upgrade_stays_unconfigured_and_retains_pending_evidence(prepared_active):
+    from deploy import feedback_release as release
+    import power_budget
+    _,_,path,clients=prepared_active
+    release.guard(path)
+    config=power_budget.load();config['state']['pending']=[dict(id='1',percent=33,at=200)]
+    power_budget.save(config)
+    release.freeze(path)
+    current=power_budget.load()
+    assert not current['enabled'] and current['target_w'] is None
+    assert current['version']==2 and current['algorithm']==power_budget.ALGORITHM
+    assert 'rated_w' not in current and current['state']['pending']==config['state']['pending']
+    assert current['state']['phase']=='disabled' and not current['state']['armed']
+    release.guard(path)
+    assert clients==[]
+
+
+@pytest.mark.parametrize('prepared_active',[False],indirect=True)
+def test_inactive_readiness_requires_no_goal_or_controller_heartbeat(prepared_active,monkeypatch):
+    from deploy import feedback_release as release
+    import power_budget
+    root,_,path,clients=prepared_active
+    release.freeze(path)
+    key=root/'instance/production/web-secret.key'
+    key.write_text('synthetic-test-secret-key-only-32-characters');key.chmod(0o600)
+    monkeypatch.setattr(release,'check_instances',lambda:None)
+    monkeypatch.setattr('deploy.check_portal.http_check',lambda origin:None)
+    monkeypatch.setattr('deploy.check_portal.telegram_check',lambda:None)
+    class Response:
+        status=200
+        def __init__(self,body):self.body=body
+        def __enter__(self):return self
+        def __exit__(self,*args):return False
+        def read(self):return self.body.encode()
+    class Opener:
+        def open(self,request,timeout):
+            route=request.full_url
+            if route.endswith('/power-budget/status'):body=json.dumps(power_budget.status())
+            elif route.endswith('/api/statuses'):body=json.dumps(dict(counts={'total':26},monitor={'alive':True}))
+            else:body='<input name="target_kw" value="">'
+            return Response(body)
+    monkeypatch.setattr(release.urllib.request,'build_opener',lambda *args:Opener())
+    state=release.check(path)
+    assert state['phase']=='disabled' and power_budget.load()['target_w'] is None and clients==[]

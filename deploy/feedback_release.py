@@ -32,7 +32,7 @@ def context(config):
 def prepare(expected,previous):
     import power_budget
     config=power_budget.load()
-    if not config or not config['enabled']:raise ValueError('An existing confirmed budget is required')
+    if not config:raise ValueError('An existing budget configuration is required')
     before=inventory_snapshot()
     path=base.prepare(expected,previous)
     data=json.loads(path.read_text())
@@ -79,11 +79,12 @@ def guard(path):
     assert digest(Path(data['database_backup']).read_bytes())==data['feedback_release']['backup_sha256']
     assert inventory_snapshot()==data['feedback_release']['inventory']
     config=power_budget.load()
-    assert config and config['enabled'] and context(config)==data['feedback_release']['context']
+    assert config and context(config)==data['feedback_release']['context']
     engine=create_engine('sqlite:///'+str(base.DATABASE),creator=lambda:sqlite3.connect(
         base.DATABASE.as_uri()+'?mode=ro',uri=True,timeout=5))
     try:
-        with Session(engine) as session:PowerController(engine)._authorized(session,config)
+        if config['enabled']:
+            with Session(engine) as session:PowerController(engine)._authorized(session,config)
     finally:engine.dispose()
     return data
 
@@ -96,6 +97,13 @@ def freeze(path):
         original=power_budget.policy_path().read_bytes()
         fd=os.open(destination,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
         with os.fdopen(fd,'wb') as stream:stream.write(original);stream.flush();os.fsync(stream.fileno())
+        config=power_budget.load()
+        if not config['enabled']:
+            # Inactive mode has no target to resume. Old workers are already stopped.
+            config.update(version=2,algorithm=power_budget.ALGORITHM)
+            config.pop('rated_w',None)
+            config['state'].update(phase='disabled',actual_w=None,known=0,armed=False,last_cycle_at=None)
+            power_budget.save(config)
 
 
 def disable_for_rollback(path):
@@ -122,7 +130,10 @@ def check(path):
     data=guard(path);check_instances()
     state=power_budget.status()
     assert power_budget.load()['version']==2 and state['algorithm']==power_budget.ALGORITHM
-    assert state['controller_alive'] and state['armed'] and state['phase']!='paused'
+    if state['enabled']:
+        assert state['controller_alive'] and state['armed'] and state['phase']!='paused'
+    else:
+        assert state['phase']=='disabled' and not state['armed']
     engine=create_engine('sqlite:///file:'+str(base.DATABASE)+'?mode=ro&uri=true')
     try:
         with Session(engine) as session:
@@ -143,7 +154,9 @@ def check(path):
                 if route=='/power-budget':assert 'name="rated_kw"' not in content
                 elif route=='/power-budget/status':
                     status=json.loads(content)
-                    assert status['algorithm']==power_budget.ALGORITHM and status['controller_alive']
+                    assert status['algorithm']==power_budget.ALGORITHM
+                    if state['enabled']:assert status['controller_alive']
+                    else:assert not status['enabled'] and status['target_w']==state['target_w']
                 else:
                     status=json.loads(content)
                     assert status['counts']['total']==data['feedback_release']['inventory']['count']
@@ -216,6 +229,7 @@ class Activation:
             ready=None
             for _ in range(12):
                 try:
+                    self.run('systemctl','is-active',*SERVICES)
                     ready=self.helper('check');break
                 except Exception:self.pause(3)
             if ready is None:raise RuntimeError('Feedback readiness failed')
